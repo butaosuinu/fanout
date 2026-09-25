@@ -144,13 +144,19 @@ function placeInferred(prs: StackIndex["prs"], ctx: InferredPlacing): void {
   }
 }
 
-/* 推定連鎖の候補。head branch ごとに 1 本(先に見つかった open の PR)。 */
+/* 推定連鎖の候補。head branch ごとに open の PR がちょうど 1 本のものだけ。同じ
+ * head から base 違いの PR を複数立てられるので、2 本以上ある head はどちらが下の
+ * 層か決まらない。片方を採ると、実在しない一意な柱と trunk を描いてしまう。 */
 function chainHeads(prs: StackIndex["prs"], repo: string, native: Set<number>): Map<string, PRRef> {
   const out = new Map<string, PRRef>();
+  const ambiguous = new Set<string>();
   for (const { pr } of prs.values()) {
+    if (!chainable(pr, repo, native)) continue;
     const head = pr.headRef ?? "";
-    if (chainable(pr, repo, native) && !out.has(head)) out.set(head, pr);
+    if (out.has(head)) ambiguous.add(head);
+    else out.set(head, pr);
   }
+  for (const head of ambiguous) out.delete(head);
   return out;
 }
 

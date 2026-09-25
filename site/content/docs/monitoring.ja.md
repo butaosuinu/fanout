@@ -200,7 +200,8 @@ stacked PR の層にある PR には、`pr` 列に `⧉ 2/3` タグが付きま�
 状態ピルだけです。GitHub の native stacked PR は GitHub から約 1 分ごとに読みます。
 同じ repository で、base branch がダッシュボード上の別の open な PR の head branch に
 なっている open な PR も、推定の連鎖として同じように描きます。見出しに「推定」と
-付き、2 本の PR が積まれた branch で連鎖は切れます。
+付き、2 本の PR が積まれた branch や、2 本の open な PR が出ている branch で連鎖は
+切れます。
 
 stack のタグを除き、列に出ている語はそのままフィルタに打てます。`pr:` はライフサイクル状態（`open` /
 `closed` / `merged`）とピルのラベル（`approved` / `changes-requested` /

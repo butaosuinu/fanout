@@ -465,6 +465,12 @@ func (p *poller) refreshStacks(build func() sessionview.Snapshot) {
 // read missed keeps its last known stack until that stack is staleStacksAfter
 // wave intervals old. Pull requests no longer shown drop out.
 func (p *poller) keepStacks(nums []int, fetched map[int]*ghissue.PRStack, now time.Time) {
+	unstacked := map[int]bool{}
+	for num, s := range fetched {
+		if s == nil {
+			unstacked[num] = true
+		}
+	}
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 	next := make(map[int]stackCacheEntry, len(nums))
@@ -474,10 +480,26 @@ func (p *poller) keepStacks(nums []int, fetched map[int]*ghissue.PRStack, now ti
 			e, ok = stackCacheEntry{stack: s, readAt: now}, s != nil
 		}
 		if ok && now.Sub(e.readAt) <= staleStacksAfter*p.waveInterval {
-			next[num] = e
+			next[num] = e.without(unstacked)
 		}
 	}
 	p.stackCache = next
+}
+
+// without drops from a kept stack's entries the pull requests a fresh read found
+// in no stack. The web fills a layer whose own read failed from its siblings'
+// entries, so a last-known stack must not name a pull request known to be out
+// of it: that would put it back into a stack GitHub just said it left. The
+// copy keeps readAt; shared entries are never mutated.
+func (e stackCacheEntry) without(unstacked map[int]bool) stackCacheEntry {
+	if !slices.ContainsFunc(e.stack.Entries, func(x ghissue.PRStackEntry) bool { return unstacked[x.PR.Number] }) {
+		return e
+	}
+	s := *e.stack
+	s.Entries = slices.DeleteFunc(slices.Clone(s.Entries), func(x ghissue.PRStackEntry) bool {
+		return unstacked[x.PR.Number]
+	})
+	return stackCacheEntry{stack: &s, readAt: e.readAt}
 }
 
 // shownPRNumbers lists the distinct pull requests of this repository in snap,

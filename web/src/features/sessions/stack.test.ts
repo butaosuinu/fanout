@@ -159,6 +159,13 @@ describe("stackOf", () => {
       of: 2,
       want: { kind: "inferred", position: 2, size: 2, baseRef: "main", layers: [3, 2] },
     },
+    // base 違いで同じ head から 2 本立っていると、どちらが下の層か決まらない
+    {
+      name: "推定: 同じ head に open の PR が 2 本ある branch はつながない",
+      prs: [a, chainPr(3, "a", "develop"), b],
+      of: 2,
+      want: null,
+    },
     {
       name: "native stack の PR は推定の連鎖に混ぜない",
       prs: [a, chainPr(2, "b", "a", { stack: native12(2) })],

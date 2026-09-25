@@ -477,6 +477,42 @@ func TestRefreshStacksPartialReadKeepsWhatItRead(t *testing.T) {
 	}
 }
 
+// TestRefreshStacksDropsPRsReadOutOfStackFromKeptEntries pins that a fresh
+// "not in a stack" answer beats a sibling's last-known entries: the web fills
+// unread layers from entries, so the kept stack must stop naming the PR.
+func TestRefreshStacksDropsPRsReadOutOfStackFromKeptEntries(t *testing.T) {
+	stack := &ghissue.PRStack{Number: 3, Size: 2, Position: 1, BaseRef: "main", Entries: []ghissue.PRStackEntry{
+		{Position: 1, PR: ghissue.PRRef{Number: 700}},
+		{Position: 2, PR: ghissue.PRRef{Number: 701}},
+	}}
+	gh := &countingGH{
+		branchPRs: []ghissue.PRRef{
+			{Number: 700, State: "OPEN", BaseRepo: "o/n"},
+			{Number: 701, State: "OPEN", BaseRepo: "o/n"},
+		},
+		stacks: map[int]*ghissue.PRStack{700: stack, 701: stack},
+	}
+	p := newStackPoller(t, gh)
+	stackTick(p)
+	// #700's read now fails, keeping its last-known stack; #701 reads as out of
+	// any stack.
+	p.lastStackRefresh = time.Time{}
+	gh.stacks = map[int]*ghissue.PRStack{}
+	gh.stackFails = map[int]bool{700: true}
+	stackTick(p)
+
+	kept := p.stackCache[700].stack
+	if kept == nil || len(kept.Entries) != 1 || kept.Entries[0].PR.Number != 700 {
+		t.Fatalf("stackCache[700] = %+v, want the kept stack without #701", kept)
+	}
+	if len(stack.Entries) != 2 {
+		t.Fatalf("shared stack entries = %+v, want them left untouched", stack.Entries)
+	}
+	if _, ok := p.stackCache[701]; ok {
+		t.Fatalf("stackCache[701] = %+v, want it gone", p.stackCache[701])
+	}
+}
+
 func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 	root := t.TempDir()
 	writeState(t, root, `{"schemaVersion":1,"panes":[
