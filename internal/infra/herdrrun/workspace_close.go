@@ -68,7 +68,15 @@ func attachedTargetFromBinding(binding corebackend.PaneBinding) corebackend.Owne
 // BindOwnedWorkspaceClose admits an exact generic workspace for close. It is
 // limited to console/coordinator workspaces without linked worktrees; linked
 // worktree close must retain the stronger ownership proof used by BindOwnedClose.
-func (b *Backend) BindOwnedWorkspaceClose(target corebackend.OwnedPaneIdentity) (*Backend, error) {
+func (b *Backend) BindOwnedWorkspaceClose(target corebackend.OwnedPaneIdentity) (corebackend.OwnedClosingBackend, error) {
+	bound, err := b.bindOwnedWorkspaceClose(target)
+	if err != nil {
+		return nil, err
+	}
+	return bound, nil
+}
+
+func (b *Backend) bindOwnedWorkspaceClose(target corebackend.OwnedPaneIdentity) (*boundBackend, error) {
 	if target.RepoKey != "" || target.WorktreePath != "" {
 		return nil, fmt.Errorf("%w: generic workspace close cannot own a checkout", corebackend.ErrOwnedIdentityMismatch)
 	}

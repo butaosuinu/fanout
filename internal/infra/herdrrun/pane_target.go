@@ -27,8 +27,22 @@ type ownedTargetAdmission struct {
 	closeFingerprint corebackend.CloseRequest
 }
 
-func (b *Backend) BindOwnedTarget(target corebackend.OwnedPaneIdentity) (*Backend, error) {
-	return b.bindOwnedTarget(target, nil)
+// boundBackend is a Backend bound to one immutable owned target admission.
+// Only it issues the targeted Read/SendLine/Focus/Close/CloseOwned; the
+// unbound Backend reports them Unsupported.
+type boundBackend struct {
+	*Backend
+	target ownedTargetAdmission
+}
+
+var _ corebackend.OwnedClosingBackend = (*boundBackend)(nil)
+
+func (b *Backend) BindOwnedTarget(target corebackend.OwnedPaneIdentity) (corebackend.OwnedClosingBackend, error) {
+	bound, err := b.bindOwnedTarget(target, nil)
+	if err != nil {
+		return nil, err
+	}
+	return bound, nil
 }
 
 // VerifyOwnedTarget admits target on this session and keeps only the verdict,
@@ -51,15 +65,19 @@ func ownedTargetFromBinding(binding corebackend.PaneBinding) corebackend.OwnedPa
 	}
 }
 
-func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
+func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (corebackend.OwnedClosingBackend, error) {
 	cloned := cloneOwnedCloseRequest(req)
-	return b.bindOwnedTarget(cloned.Target, &cloned)
+	bound, err := b.bindOwnedTarget(cloned.Target, &cloned)
+	if err != nil {
+		return nil, err
+	}
+	return bound, nil
 }
 
-func (b *Backend) bindOwnedTarget(target corebackend.OwnedPaneIdentity, closeRequest *OwnedCloseRequest) (*Backend, error) {
+func (b *Backend) bindOwnedTarget(target corebackend.OwnedPaneIdentity, closeRequest *OwnedCloseRequest) (*boundBackend, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*commandTimeout)
 	defer cancel()
-	var bound *Backend
+	var bound *boundBackend
 	err := b.withOwnedAdmission(ctx, ownedOperationLane, nil, func(call ownedCall) error {
 		target = cloneOwnedPaneIdentity(target)
 		if err := validateSavedTarget(target, call.admission); err != nil {
@@ -68,7 +86,7 @@ func (b *Backend) bindOwnedTarget(target corebackend.OwnedPaneIdentity, closeReq
 		if _, _, err := call.resolveOwnedTarget(ctx, target); err != nil {
 			return err
 		}
-		targetAdmission := &ownedTargetAdmission{target: target}
+		targetAdmission := ownedTargetAdmission{target: target}
 		if closeRequest != nil {
 			cloned := cloneOwnedCloseRequest(*closeRequest)
 			if err := verifyWorktreeOwnership(cloned); err != nil {
@@ -140,26 +158,23 @@ func validateAgentRenameResponse(data []byte) error {
 	return nil
 }
 
-func (b *Backend) cloneWithTarget(target *ownedTargetAdmission) *Backend {
-	clone := &Backend{herdrCLI: b.clone(), target: target}
+func (b *Backend) cloneWithTarget(target ownedTargetAdmission) *boundBackend {
+	clone := &Backend{herdrCLI: b.clone()}
 	if b.owner != nil {
 		owner := *b.owner
 		clone.owner = &owner
 	}
-	return clone
+	return &boundBackend{Backend: clone, target: target}
 }
 
-func (b *Backend) boundOwnedTarget(ref corebackend.PaneRef, operation string) (corebackend.OwnedPaneIdentity, error) {
-	if b == nil || b.target == nil {
-		return corebackend.OwnedPaneIdentity{}, corebackend.Unsupported(corebackend.Herdr, operation+" without an immutable target admission")
-	}
+func (b *boundBackend) boundOwnedTarget(ref corebackend.PaneRef, operation string) (corebackend.OwnedPaneIdentity, error) {
 	if ref != b.target.target.Ref {
 		return corebackend.OwnedPaneIdentity{}, fmt.Errorf("%w: %s reference does not match immutable admission", corebackend.ErrOwnedIdentityMismatch, operation)
 	}
 	return cloneOwnedPaneIdentity(b.target.target), nil
 }
 
-func (b *Backend) readCore(ref corebackend.PaneRef, lines int) (string, error) {
+func (b *boundBackend) Read(ref corebackend.PaneRef, lines int) (string, error) {
 	target, err := b.boundOwnedTarget(ref, "read")
 	if err != nil {
 		return "", err
@@ -213,7 +228,7 @@ func (b *Backend) readOwned(ctx context.Context, saved corebackend.OwnedPaneIden
 	return text, nil
 }
 
-func (b *Backend) sendLineCore(ref corebackend.PaneRef, line string) error {
+func (b *boundBackend) SendLine(ref corebackend.PaneRef, line string) error {
 	target, err := b.boundOwnedTarget(ref, "send line")
 	if err != nil {
 		return err
@@ -250,7 +265,7 @@ func (b *Backend) sendLineOwned(ctx context.Context, saved corebackend.OwnedPane
 	})
 }
 
-func (b *Backend) focusCore(ref corebackend.PaneRef) error {
+func (b *boundBackend) Focus(ref corebackend.PaneRef) error {
 	target, err := b.boundOwnedTarget(ref, "focus")
 	if err != nil {
 		return err
@@ -292,7 +307,7 @@ func (b *Backend) focusOwned(ctx context.Context, saved corebackend.OwnedPaneIde
 	})
 }
 
-func (b *Backend) closeCore(ref corebackend.PaneRef) error {
+func (b *boundBackend) Close(ref corebackend.PaneRef) error {
 	target, err := b.boundOwnedTarget(ref, "close pane")
 	if err != nil {
 		return err
@@ -327,10 +342,10 @@ func (b *Backend) closePaneOwned(ctx context.Context, saved corebackend.OwnedPan
 	})
 }
 
-func (b *Backend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseResult, error) {
+func (b *boundBackend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseResult, error) {
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
-	if b == nil || b.target == nil || (!b.target.workspaceClose && b.target.closeRequest == nil) {
-		return failed, corebackend.Unsupported(corebackend.Herdr, "owned close without an immutable target admission")
+	if !b.target.workspaceClose && b.target.closeRequest == nil {
+		return failed, unboundOwnedClose()
 	}
 	if req != b.target.closeFingerprint {
 		return failed, fmt.Errorf("%w: close request does not match immutable admission", corebackend.ErrOwnedIdentityMismatch)

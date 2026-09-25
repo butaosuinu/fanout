@@ -12,7 +12,7 @@ import (
 )
 
 type coordinatorCloser struct {
-	*Backend
+	*boundBackend
 	session *OwnedSession
 }
 
@@ -32,7 +32,7 @@ func (s *OwnedSession) BindOwnedCoordinatorClose(intent state.LaunchIntent) (cor
 	if s == nil || s.backend == nil {
 		return nil, fmt.Errorf("herdr owned session is nil")
 	}
-	bound, err := s.backend.BindOwnedWorkspaceClose(corebackend.OwnedPaneIdentity{
+	bound, err := s.backend.bindOwnedWorkspaceClose(corebackend.OwnedPaneIdentity{
 		Ref:       corebackend.PaneRef{Backend: corebackend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID},
 		SessionID: intent.Session, SocketPath: intent.SocketPath, WorkspaceLabel: intent.Resource.Label,
 		TerminalID: intent.Resource.TerminalID, CurrentPath: intent.WorktreePath,
@@ -40,7 +40,7 @@ func (s *OwnedSession) BindOwnedCoordinatorClose(intent state.LaunchIntent) (cor
 	if err != nil {
 		return nil, err
 	}
-	return &coordinatorCloser{Backend: bound, session: s}, nil
+	return &coordinatorCloser{boundBackend: bound, session: s}, nil
 }
 
 func (c *coordinatorCloser) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseResult, error) {
