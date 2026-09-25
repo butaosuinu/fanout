@@ -1106,6 +1106,20 @@ go_finding() {
   [[ "$output" != *"pkg/c.go"* ]]
 }
 
+@test "complexity-diff: without --base-root an unchanged funlen stays pre-existing" {
+  # The edit hook passes no --base-root; both sides must fall back to file keys.
+  local dir="$BATS_TEST_TMPDIR/cx-noroot"
+  mkdir -p "$dir/pkg"
+  printf 'package pkg\n\nfunc (a *A) Run() {}\n' >"$dir/pkg/a.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  cp "$dir/base.sarif" "$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "complexity-diff: a second over-budget init in another file is new" {
   local dir="$BATS_TEST_TMPDIR/cx-init"
   mkdir -p "$dir"

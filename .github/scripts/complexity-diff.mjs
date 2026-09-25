@@ -222,6 +222,8 @@ const normalizeText = (rule, text) => {
 // - funlen の本文は receiver を書かない ("Function 'Run' is too long")。測った木の
 //   宣言行から receiver を読んで鍵に足し、(*A).Run が (*B).Run を吸収しないようにする。
 //   読めなければファイル単位へ退避する (取りこぼすより新規扱いのほうがまし)。
+//   --base-root が無い呼び出し (編集フック) は base 側の receiver を読めないので、
+//   両側ともファイル単位にそろえる。片側だけ receiver 付きの鍵にすると一致しない。
 const PACKAGE_KEYED_RULES = new Set(["gocognit", "gocyclo", "funlen"]);
 const REPEATABLE_FUNCS = new Set(["init", "_"]);
 const funcName = (r) => {
@@ -255,7 +257,7 @@ const location = (r) => {
   if (!file.endsWith(".go") || !PACKAGE_KEYED_RULES.has(r.rule)) return file;
   if (REPEATABLE_FUNCS.has(funcName(r))) return file;
   if (r.rule !== "funlen") return path.dirname(file);
-  const recv = receiverOf(r);
+  const recv = baseRoot ? receiverOf(r) : null;
   return recv === null ? file : `${path.dirname(file)}|${recv}`;
 };
 const identity = (r) => `${location(r)}|${r.rule}|${normalizeText(r.rule, r.text)}`;
