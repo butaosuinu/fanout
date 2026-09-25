@@ -33,16 +33,16 @@ func (s *OwnedSession) PrepareNudge(ctx context.Context, target corebackend.Nudg
 	if err := validateNudgeRequest(s, line); err != nil {
 		return nil, err
 	}
-	admission, lock, err := s.backend.acquireOwnedMutation(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer unlockPrivateFile(lock)
-	if !validNudgeTarget(target, admission) {
-		return nil, fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", corebackend.ErrOwnedIdentityMismatch)
-	}
-	target.AgentSession = cloneAgentSession(target.AgentSession)
-	probed, err := s.backend.probeOwned(ctx, admission)
+	var probed probeResult
+	err := s.backend.withOwnedAdmission(ctx, ownedMutationLane, nil, func(call ownedCall) error {
+		if !validNudgeTarget(target, call.admission) {
+			return fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", corebackend.ErrOwnedIdentityMismatch)
+		}
+		target.AgentSession = cloneAgentSession(target.AgentSession)
+		var err error
+		probed, err = call.probe(ctx)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

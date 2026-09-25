@@ -31,12 +31,12 @@ type ownedPaneView struct {
 	agentUnnamed bool
 }
 
-func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmission) (ownedSnapshotView, error) {
-	probed, err := b.probeOwned(ctx, admission)
+func (c ownedCall) ownedSnapshotView(ctx context.Context) (ownedSnapshotView, error) {
+	probed, err := c.probe(ctx)
 	if err != nil {
 		return ownedSnapshotView{}, err
 	}
-	out, err := b.runReadContext(ctx, probed.binary, probed.route, "api", "snapshot")
+	out, err := c.b.runReadContext(ctx, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
 		return ownedSnapshotView{}, readMethodError("session.snapshot", err)
 	}
@@ -138,20 +138,19 @@ func attachedWorkspaceCheckoutMatches(workspace ownedWorkspaceView, expected cor
 	})
 }
 
-func (b *Backend) resolveOwnedTarget(ctx context.Context, admission ownedAdmission, expected corebackend.OwnedPaneIdentity) (corebackend.OwnedPaneIdentity, probeResult, error) {
-	target, probed, _, err := b.resolveOwnedTargetView(ctx, admission, expected)
+func (c ownedCall) resolveOwnedTarget(ctx context.Context, expected corebackend.OwnedPaneIdentity) (corebackend.OwnedPaneIdentity, probeResult, error) {
+	target, probed, _, err := c.resolveOwnedTargetView(ctx, expected)
 	return target, probed, err
 }
 
-func (b *Backend) resolveOwnedTargetView(
+func (c ownedCall) resolveOwnedTargetView(
 	ctx context.Context,
-	admission ownedAdmission,
 	expected corebackend.OwnedPaneIdentity,
 ) (corebackend.OwnedPaneIdentity, probeResult, ownedSnapshotView, error) {
-	if err := validateSavedTarget(expected, admission); err != nil {
+	if err := validateSavedTarget(expected, c.admission); err != nil {
 		return corebackend.OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, err
 	}
-	view, err := b.ownedSnapshotView(ctx, admission)
+	view, err := c.ownedSnapshotView(ctx)
 	if err != nil {
 		return corebackend.OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, err
 	}
@@ -159,12 +158,12 @@ func (b *Backend) resolveOwnedTargetView(
 	if !ok || !ownedPaneMatches(expected, current) {
 		return corebackend.OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, fmt.Errorf("%w: saved target is not live", corebackend.ErrOwnedIdentityMismatch)
 	}
-	probed, err := b.probeOwned(ctx, admission)
+	probed, err := c.probe(ctx)
 	return cloneOwnedPaneIdentity(expected), probed, view, err
 }
 
-func (b *Backend) verifyOwnedTargetAfter(ctx context.Context, admission ownedAdmission, target corebackend.OwnedPaneIdentity) error {
-	view, err := b.ownedSnapshotView(ctx, admission)
+func (c ownedCall) verifyOwnedTargetAfter(ctx context.Context, target corebackend.OwnedPaneIdentity) error {
+	view, err := c.ownedSnapshotView(ctx)
 	if err != nil {
 		return err
 	}

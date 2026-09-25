@@ -82,7 +82,7 @@ func TestOwnedSnapshotTimeoutRetriesOnce(t *testing.T) {
 			h.fake.errors["snapshot"] = context.DeadlineExceeded
 			var err error
 			if view {
-				_, err = b.ownedSnapshotView(t.Context(), *b.owner)
+				_, err = ownedCall{b: b, admission: *b.owner}.ownedSnapshotView(t.Context())
 			} else {
 				_, err = h.session.ObserveWorkspaces(t.Context())
 			}
