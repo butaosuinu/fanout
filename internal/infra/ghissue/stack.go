@@ -134,6 +134,16 @@ func (pr prStackEntryGraphQL) ref() PRRef {
 	}
 }
 
+// unread reports a failed read of one pull request, which PRStacks leaves out so
+// the caller keeps its last known stack instead of erasing it: a null alias (as
+// parseIssueDetailsBatch treats a null issue), or a null membership field next
+// to an error for this pull request (erred). An error deeper inside a returned
+// stack, such as one unreadable layer, leaves the rest readable, and stack()
+// skips the null.
+func (n *prStackNode) unread(erred bool) bool {
+	return n == nil || (erred && (n.Stack == nil || n.StackEntry == nil))
+}
+
 func (n *prStackNode) stack() *PRStack {
 	if n.Stack == nil || n.StackEntry == nil {
 		return nil
@@ -164,24 +174,21 @@ func parsePRStacks(out []byte, nums []int) (map[int]*PRStack, error) {
 		return nil, fmt.Errorf("parse gh api graphql pr stacks: %w", err)
 	}
 	var loadErr error
+	erred := map[string]bool{}
 	for _, graphErr := range root.Errors {
 		alias := aliasFromPath(graphErr.Path, "pr_")
 		if alias == "" {
 			return nil, fmt.Errorf("gh api graphql pr stacks: %s", graphErr.Message)
 		}
+		erred[alias] = true
 		loadErr = errors.Join(loadErr, fmt.Errorf("%s: graphql: %s", alias, graphErr.Message))
 	}
 	stacks := make(map[int]*PRStack, len(nums))
 	for _, num := range nums {
-		// Only a null alias is unread: dropping it keeps the last known stack
-		// instead of erasing it, the same as parseIssueDetailsBatch treats a null
-		// issue. An error deeper inside the node, such as one unreadable layer,
-		// leaves the rest of the stack readable, and stack() skips the null.
-		node := root.Data.Repository["pr_"+strconv.Itoa(num)]
-		if node == nil {
-			continue
+		alias := "pr_" + strconv.Itoa(num)
+		if node := root.Data.Repository[alias]; !node.unread(erred[alias]) {
+			stacks[num] = node.stack()
 		}
-		stacks[num] = node.stack()
 	}
 	return stacks, loadErr
 }

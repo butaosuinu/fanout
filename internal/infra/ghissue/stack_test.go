@@ -54,6 +54,14 @@ func TestPRStacks(t *testing.T) {
 			wantErr: "Field 'stack' doesn't exist",
 		},
 		{
+			name: "treats a membership nulled by an error as unread, not as no stack",
+			output: `{"data":{"repository":{"pr_844":{"stackEntry":{"position":2},"stack":null},"pr_845":{"stackEntry":null,"stack":null}}},
+			  "errors":[{"message":"Something went wrong while executing your query.","path":["repository","pr_844","stack"]}]}`,
+			exit:    1,
+			want:    map[int]*PRStack{845: nil},
+			wantErr: "pr_844: graphql: Something went wrong",
+		},
+		{
 			name:   "treats a null pull request without an error as unread",
 			output: `{"data":{"repository":{"pr_844":null,"pr_845":{"stackEntry":null,"stack":null}}}}`,
 			want:   map[int]*PRStack{845: nil},
