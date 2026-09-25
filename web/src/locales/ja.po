@@ -157,6 +157,10 @@ msgstr "アクティブなセッションがありません"
 msgid "ブランチを削除"
 msgstr "ブランチを削除"
 
+#: src/features/sessions/badges.tsx
+msgid "base 連鎖(推定)· {size} 層中 {position} 層目 → {baseRef}"
+msgstr "base 連鎖(推定)· {size} 層中 {position} 層目 → {baseRef}"
+
 #: src/features/drawer/Drawer.tsx
 #: src/features/sessions/SessionSection.tsx
 msgid "変更を表示"
@@ -368,6 +372,10 @@ msgstr "マージがタイムアウトしました。GitHub 側の状態を確�
 msgid "表示中の差分より PR が進んでいます。再取得してから実行してください"
 msgstr "表示中の差分より PR が進んでいます。再取得してから実行してください"
 
+#: src/features/drawer/StackMap.tsx
+msgid "stack #{number} → {baseRef} · {size} 層"
+msgstr "stack #{number} → {baseRef} · {size} 層"
+
 #: src/features/merge/merge.ts
 msgid "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
 msgstr "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
@@ -422,6 +430,10 @@ msgstr "レビュー対象が patch に揃っていません — patch は不完
 #: src/features/sessions/badges.tsx
 msgid "base branch と競合しています"
 msgstr "base branch と競合しています"
+
+#: src/features/drawer/StackMap.tsx
+msgid "◀ この Session"
+msgstr "◀ この Session"
 
 #: src/features/merge/merge.ts
 msgid "表示中の差分を取得できていません。再取得してから実行してください"
@@ -591,6 +603,14 @@ msgstr "{key} の選択肢を検索"
 #: src/features/settings/SettingsModal.tsx
 msgid "設定"
 msgstr "設定"
+
+#: src/features/drawer/StackMap.tsx
+msgid "base 連鎖(推定)→ {baseRef} · {size} 層"
+msgstr "base 連鎖(推定)→ {baseRef} · {size} 層"
+
+#: src/features/sessions/badges.tsx
+msgid "stack #{number} · {size} 層中 {position} 層目 → {baseRef}"
+msgstr "stack #{number} · {size} 層中 {position} 層目 → {baseRef}"
 
 #: src/app/App.tsx
 msgid "差分ビュアーを読み込めませんでした。ダッシュボードを再起動した直後だと、開いたままのページが古いスクリプトを指していることがあります。"

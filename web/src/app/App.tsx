@@ -33,6 +33,7 @@ import type { PaneView, Snapshot } from "../transport/types";
 import { ChunkBoundary } from "../ui/ChunkBoundary";
 import { Drawer } from "../features/drawer/Drawer";
 import { MergeSlot } from "../features/merge/MergeSlot";
+import { StackIndexProvider } from "../features/sessions/StackIndex";
 import { useDiffReport, type DiffReport } from "../features/diff/useDiffReport";
 import { useMergeFlow, type MergeAffordance } from "../features/merge/useMergeFlow";
 
@@ -340,7 +341,7 @@ function Dashboard() {
   };
 
   return (
-    <>
+    <StackIndexProvider snap={snap}>
       <Nav
         repo={repo}
         projectRoot={snap?.projectRoot ?? ""}
@@ -436,7 +437,7 @@ function Dashboard() {
         />
       )}
       {settingsOpen && <SettingsModal onClose={closeSettings} />}
-    </>
+    </StackIndexProvider>
   );
 }
 

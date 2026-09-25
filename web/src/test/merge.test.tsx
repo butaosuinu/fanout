@@ -972,6 +972,58 @@ describe("マージ後のブランチ削除", () => {
     );
   });
 
+  /* stack map は他の行の層も描くが、削除は行の head と照合される。他の行の層に
+   * 出すと、押すたびに 409 になるボタンになる。 */
+  it("stack map では自分の層にだけ出し、他の行の層には出さない", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const merged = { state: "MERGED", mergedAt: "2026-09-01T00:00:00Z" };
+    const entries = [
+      { position: 1, pr: { number: 701, ...merged } },
+      { position: 2, pr: { number: 702, ...merged } },
+    ];
+    const stack = (position: number) => ({
+      number: 9,
+      size: 2,
+      baseRef: "main",
+      position,
+      entries,
+    });
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            // 記録 branch の無い issue 行: 表示側の head 照合がどの head も通す形
+            branchName: "",
+            prs: [makePr({ ...merged, headRef: "fanout/fix-login", stack: stack(1) })],
+          }),
+          makePane({
+            issueNum: 102,
+            displayName: "Next layer",
+            slug: "next-layer",
+            paneId: "%2",
+            branchName: "fanout/next-layer",
+            prs: [
+              makePr({ ...merged, number: 702, headRef: "fanout/next-layer", stack: stack(2) }),
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    expect(within(drawer).getByRole("link", { name: "#702 merged" })).toBeInTheDocument();
+    const buttons = within(drawer).getAllByRole("button", { name: "ブランチを削除" });
+    expect(buttons).toHaveLength(1);
+    expect(
+      within(buttons[0]!.closest("li")!).getByRole("link", { name: "#701 merged" }),
+    ).toBeInTheDocument();
+  });
+
   /* fork の head を base 側の同名 branch として消さないための表示側ガード。 */
   it("fork の head PR には出さない", async () => {
     const user = userEvent.setup();
