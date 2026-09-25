@@ -1080,8 +1080,59 @@ go_finding() {
 
   run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
   [ "$status" -eq 0 ]
-  [[ "$output" != *'`Moved`'* ]]
+  [[ "$output" != *'`Moved`'* ]] || false
   [[ "$output" == *'`Fresh`'* ]]
+}
+
+@test "complexity-diff: funlen tells same-named methods apart by receiver" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A).Run shrinks under budget, (*C).Run moves a.go -> c.go, a new long (*B).Run appears.
+  printf 'package pkg\n\nfunc (a *A) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (c *C) Run() {}\n' >"$dir/base/pkg/x.go"
+  printf 'package pkg\n\nfunc (b *B) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc (c *C) Run() {}\n' >"$dir/cur/pkg/c.go"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" \
+    "$(go_finding pkg/x.go funlen "Function 'Run' is too long (65 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (65 > 60)")" \
+    "$(go_finding pkg/c.go funlen "Function 'Run' is too long (65 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]] || false
+  [[ "$output" != *"pkg/c.go"* ]]
+}
+
+@test "complexity-diff: without --base-root an unchanged funlen stays pre-existing" {
+  # The edit hook passes no --base-root; both sides must fall back to file keys.
+  local dir="$BATS_TEST_TMPDIR/cx-noroot"
+  mkdir -p "$dir/pkg"
+  printf 'package pkg\n\nfunc (a *A) Run() {}\n' >"$dir/pkg/a.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  cp "$dir/base.sarif" "$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: a second over-budget init in another file is new" {
+  local dir="$BATS_TEST_TMPDIR/cx-init"
+  mkdir -p "$dir"
+  local init_a init_b
+  init_a="$(go_finding pkg/a.go gocognit 'cognitive complexity 25 of func `init` is high (> 20)')"
+  init_b="$(go_finding pkg/b.go gocognit 'cognitive complexity 25 of func `init` is high (> 20)')"
+  # a.go's init shrinks under budget while b.go gains a new over-budget init.
+  printf '{"runs":[{"results":[%s]}]}' "$init_a" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' "$init_b" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]]
 }
 
 @test "complexity-on-edit: degrades to advice after the retry cap" {

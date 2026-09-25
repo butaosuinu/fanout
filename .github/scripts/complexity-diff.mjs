@@ -11,7 +11,7 @@
 // 避けるのが元々の要件で、ベースライン比較はそれも同時に満たす。
 //
 // 使い方:
-//   node complexity-diff.mjs --current <sarif> [--base <sarif>] [--merge-base <sha>] [--root <dir>]
+//   node complexity-diff.mjs --current <sarif> [--base <sarif>] [--base-root <dir>] [--merge-base <sha>] [--root <dir>]
 //
 // --base があれば回帰比較、無ければ --merge-base からの変更行フィルタに退避する。
 // 生き残った finding を stdout へ 1 行 1 件で出し、絞り込み後の SARIF を --current へ
@@ -30,6 +30,8 @@ const currentPath = opt("--current");
 const basePath = opt("--base");
 const mergeBase = opt("--merge-base");
 const root = opt("--root") ?? process.cwd();
+// ベースラインを測った木 (merge base の展開先)。funlen の receiver を読むのに使う。
+const baseRoot = opt("--base-root");
 
 if (!currentPath) {
   console.error("usage: complexity-diff.mjs --current <sarif> [--base <sarif>] [--merge-base <sha>]");
@@ -76,7 +78,8 @@ function relativeUri(uri) {
 // 成立しないので、こちらも finding として扱う。
 const UNUSED_DISABLE_RULE = "eslint-unused-disable";
 
-function readResults(file) {
+// tree は SARIF を測ったソースの木。宣言行を読み直すときの基点になる。
+function readResults(file, tree) {
   const sarif = JSON.parse(fs.readFileSync(file, "utf8"));
   const out = [];
   for (const run of sarif.runs ?? []) {
@@ -87,6 +90,7 @@ function readResults(file) {
       out.push({
         raw: result,
         run,
+        tree,
         file: location?.artifactLocation?.uri ? relativeUri(location.artifactLocation.uri) : "",
         line: location?.region?.startLine,
         rule: result.ruleId ?? ruleIds[result.ruleIndex] ?? "?",
@@ -211,13 +215,50 @@ const normalizeText = (rule, text) => {
 // Go の関数名はパッケージ内で一意で、メソッドは gocognit/gocyclo の本文に receiver
 // が載るので、ディレクトリ + 本文で同じ関数を指せる。ファイルで鍵にすると、同じ
 // パッケージ内で既存の関数を別ファイルへ移しただけで新規違反に化ける。
-// funlen の本文は receiver を書かないので、別の型の同名メソッドは同じ鍵になる。
-// これはファイル単位の鍵でも同じファイル内では既に起きていたことで、その範囲が
-// パッケージへ広がるだけ。
+//
+// 例外が 2 つある。
+// - init と _ はパッケージ内に何個でも宣言できるのでファイル単位のまま。パッケージで
+//   鍵にすると、ある init の base 値が別ファイルの新しい init を吸収する。
+// - funlen の本文は receiver を書かない ("Function 'Run' is too long")。測った木の
+//   宣言行から receiver を読んで鍵に足し、(*A).Run が (*B).Run を吸収しないようにする。
+//   読めなければファイル単位へ退避する (取りこぼすより新規扱いのほうがまし)。
+//   --base-root が無い呼び出し (編集フック) は base 側の receiver を読めないので、
+//   両側ともファイル単位にそろえる。片側だけ receiver 付きの鍵にすると一致しない。
 const PACKAGE_KEYED_RULES = new Set(["gocognit", "gocyclo", "funlen"]);
+const REPEATABLE_FUNCS = new Set(["init", "_"]);
+const funcName = (r) => {
+  const m = /func `([^`]*)`|Function '([^']*)'/.exec(r.text);
+  return m ? (m[1] ?? m[2]) : undefined;
+};
+const sourceCache = new Map();
+const sourceLines = (file) => {
+  if (!sourceCache.has(file)) {
+    let lines = null;
+    try {
+      lines = fs.readFileSync(file, "utf8").split("\n");
+    } catch {
+      /* 読めなければ receiver 不明として扱う */
+    }
+    sourceCache.set(file, lines);
+  }
+  return sourceCache.get(file);
+};
+// receiverOf は宣言行の receiver 型名を返す。関数なら ""、判定できなければ null。
+const receiverOf = (r) => {
+  if (!r.tree || typeof r.line !== "number") return null;
+  const decl = sourceLines(path.resolve(r.tree, r.file))?.[r.line - 1];
+  if (decl === undefined || !/^func\b/.test(decl)) return null;
+  if (!/^func\s*\(/.test(decl)) return "";
+  const m = /^func\s*\(\s*(?:\w+\s+)?\*?\s*(\w+)/.exec(decl);
+  return m ? m[1] : null;
+};
 const location = (r) => {
   const file = baseName(r.file);
-  return file.endsWith(".go") && PACKAGE_KEYED_RULES.has(r.rule) ? path.dirname(file) : file;
+  if (!file.endsWith(".go") || !PACKAGE_KEYED_RULES.has(r.rule)) return file;
+  if (REPEATABLE_FUNCS.has(funcName(r))) return file;
+  if (r.rule !== "funlen") return path.dirname(file);
+  const recv = baseRoot ? receiverOf(r) : null;
+  return recv === null ? file : `${path.dirname(file)}|${recv}`;
 };
 const identity = (r) => `${location(r)}|${r.rule}|${normalizeText(r.rule, r.text)}`;
 const measured = (r) => {
@@ -256,7 +297,7 @@ function changedRanges(file) {
 }
 
 const owned = (r) => OWNED_RULES.has(r.rule);
-const current = readResults(currentPath);
+const current = readResults(currentPath, root);
 current.results = current.results.filter(owned);
 
 // A finding survives when the baseline has no unconsumed entry that already
@@ -266,7 +307,7 @@ current.results = current.results.filter(owned);
 let survives;
 if (basePath && fs.existsSync(basePath)) {
   const baseline = new Map();
-  for (const r of readResults(basePath).results.filter(owned)) {
+  for (const r of readResults(basePath, baseRoot).results.filter(owned)) {
     const key = identity(r);
     if (!baseline.has(key)) baseline.set(key, []);
     baseline.get(key).push(measured(r));
