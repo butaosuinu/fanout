@@ -54,38 +54,33 @@ func (c *coordinatorCloser) close(ctx context.Context, req corebackend.CloseRequ
 	if req != c.target.closeFingerprint {
 		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, corebackend.ErrOwnedIdentityMismatch)
 	}
-	admission, lock, err := c.acquireOwnedMutation(ctx)
-	if err != nil {
-		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := c.admitLauncherEOF(ctx, admission)
-	if err != nil {
-		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
-	}
-	callCtx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	if _, err := c.runWorktreeMutation(callCtx, probed.binary, probed.route, "pane", "send-keys", c.target.target.Ref.Pane, "ctrl+d"); err != nil {
-		if errors.Is(err, corebackend.ErrMutationNotIssued) {
-			return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
+	notIssued := func(err error) error { return fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err) }
+	err := c.withOwned(ctx, ownedMutationLane, sameOwnedErrors(notIssued), func(call ownedCall) error {
+		probed, err := c.admitLauncherEOF(ctx, call)
+		if err != nil {
+			return notIssued(err)
 		}
-		return failed, err
-	}
-	if err := c.waitCoordinatorAbsent(ctx, admission); err != nil {
+		callCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+		defer cancel()
+		if _, err := c.runWorktreeMutation(callCtx, probed.binary, probed.route, "pane", "send-keys", c.target.target.Ref.Pane, "ctrl+d"); err != nil {
+			if errors.Is(err, corebackend.ErrMutationNotIssued) {
+				return notIssued(err)
+			}
+			return err
+		}
+		return c.waitCoordinatorAbsent(ctx, call.admission)
+	})
+	if err != nil {
 		return failed, err
 	}
 	return corebackend.CloseResult{Status: corebackend.CloseConfirmed}, nil
 }
 
-func (c *coordinatorCloser) admitLauncherEOF(ctx context.Context, admission ownedAdmission) (probeResult, error) {
-	probed, err := c.probeOwned(ctx, admission)
-	if err != nil {
-		return probeResult{}, err
-	}
-	if processErr := c.verifyLauncherEOFProcess(ctx, probed, admission.marker.LauncherPath); processErr != nil {
+func (c *coordinatorCloser) admitLauncherEOF(ctx context.Context, call ownedCall) (probeResult, error) {
+	if processErr := c.verifyLauncherEOFProcess(ctx, call.probed, call.admission.marker.LauncherPath); processErr != nil {
 		return probeResult{}, processErr
 	}
-	target, probed, view, err := c.resolveOwnedTargetView(ctx, admission, c.target.target)
+	target, probed, view, err := c.resolveOwnedTargetView(ctx, call.admission, c.target.target)
 	if err != nil {
 		return probeResult{}, err
 	}
