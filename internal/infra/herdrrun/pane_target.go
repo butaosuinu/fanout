@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -140,16 +139,7 @@ func validateAgentRenameResponse(data []byte) error {
 }
 
 func (b *Backend) cloneWithTarget(target *ownedTargetAdmission) *Backend {
-	clone := &Backend{
-		session: b.session, socketPath: b.socketPath, probeGate: make(chan struct{}, 1),
-		lookPath: b.lookPath, stageBinary: b.stageBinary, output: b.output,
-		now: b.now, sleep: b.sleep, admitted: map[string]binaryAdmission{}, target: target,
-	}
-	maps.Copy(clone.admitted, b.admitted)
-	if b.control != nil {
-		control := *b.control
-		clone.control = &control
-	}
+	clone := &Backend{herdrCLI: b.clone(), target: target}
 	if b.owner != nil {
 		owner := *b.owner
 		clone.owner = &owner
