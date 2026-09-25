@@ -109,6 +109,8 @@ fi
 go_base_arg=(--base "$out/go-base.sarif")
 # --merge-base は常に渡す: ベースライン比較でもリネーム検出に要る。
 go_base_arg+=(--merge-base "$merge_base")
+# funlen の本文に receiver が無いので、ベースライン側の宣言行は展開した木から読む。
+go_base_arg+=(--base-root "$base_tree")
 
 # 空のベースラインは「既存違反ゼロのリポジトリ」でも起きる正常な状態なので、
 # それ自体をエラーにはしない (エラーにすると最初の 1 件を足した PR が必ず落ちる)。
