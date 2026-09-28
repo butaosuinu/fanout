@@ -35,7 +35,10 @@ import {
   PrPill,
   PrReviewTag,
 } from "../sessions/badges";
+import { groupPrs } from "../sessions/stack";
+import { useStackIndex } from "../sessions/StackIndex";
 import { GhLink } from "../../ui/Tag";
+import { StackMap } from "./StackMap";
 
 /* 上部バーの「変更を表示」に添える差分行数。解析できない(`-` など)ときは出さない */
 function DiffStat({ summary }: { summary?: string }) {
@@ -120,20 +123,15 @@ function WaveSection({ pane, repo }: { pane: PaneView; repo: string }) {
   );
 }
 
-/* ドロワーの PR 1 件。タグはどれも該当しなければ null を返すので、ここに条件分岐は
- * 置かない。区切りの空白は不要 — .d-prs li が flex + gap を持っている。 */
-function PrRow({
-  pr,
-  repo,
-  cleanup,
-}: {
-  pr: PRRef;
-  repo: string;
-  /* マージ後の後片付け導線。出せる行にだけ渡る。 */
-  cleanup: { query: Record<string, string>; token: string; branch: string } | null;
-}) {
+/* マージ後の後片付け導線。出せる行にだけ渡る。 */
+type Cleanup = { query: Record<string, string>; token: string; branch: string } | null;
+
+/* ドロワーの PR 1 件ぶんの信号。タグはどれも該当しなければ null を返すので、ここに
+ * 条件分岐は置かない。区切りの空白は不要 — .d-prs li が flex + gap を持っている。
+ * 平坦な行と stack map の自分の層が共有する。 */
+function PrSignals({ pr, repo, cleanup }: { pr: PRRef; repo: string; cleanup: Cleanup }) {
   return (
-    <li>
+    <>
       <PrPill repo={repo} pr={pr} />
       <PrCiTag ci={pr.ci} />
       <PrConflictTag pr={pr} />
@@ -147,7 +145,7 @@ function PrRow({
           token={cleanup.token}
         />
       )}
-    </li>
+    </>
   );
 }
 
@@ -162,18 +160,23 @@ function PrsSection({
   parent: string;
   token: string;
 }) {
-  const prs = pane.prs ?? [];
+  const stacks = useStackIndex();
+  const groups = groupPrs(pane.prs ?? [], stacks);
   const query = rowQuery(parent, pane);
   const cleanup = query ? { query, token, branch: pane.branchName ?? "" } : null;
+  const renderOwn = (pr: PRRef) => <PrSignals pr={pr} repo={repo} cleanup={cleanup} />;
   return (
     <section className="d-sec">
       <h4>pull requests</h4>
       <ul className="d-prs" id="d-prs">
-        {prs.length ? (
-          prs.map((pr) => <PrRow key={pr.number} pr={pr} repo={repo} cleanup={cleanup} />)
-        ) : (
-          <li className="muted">—</li>
+        {groups.map((g) =>
+          "stack" in g ? (
+            <StackMap key={g.key} view={g.stack} pane={pane} repo={repo} renderOwn={renderOwn} />
+          ) : (
+            <li key={g.key}>{renderOwn(g.pr)}</li>
+          ),
         )}
+        {!groups.length && <li className="muted">—</li>}
       </ul>
     </section>
   );

@@ -157,6 +157,24 @@ export interface PRRef {
    * 取り消しの唯一の合図になる。 */
   autoMerge?: boolean;
   queued?: boolean;
+  /* GitHub native stack への所属(ghissue.PRStack)。ダッシュボードの poller だけが
+   * 埋める。表示専用 — マージ・branch 削除・保持の解放は entries を見ない。 */
+  stack?: PRStack;
+}
+
+/* 1 = base に最も近い層。entries の PR は number / state / mergedAt / isDraft /
+ * reviewDecision / headRef だけを持つ軽量コピー。 */
+export interface PRStack {
+  number: number;
+  size: number;
+  baseRef: string;
+  position: number;
+  entries?: PRStackEntry[];
+}
+
+export interface PRStackEntry {
+  position: number;
+  pr: PRRef;
 }
 
 export interface BlockerStatus {

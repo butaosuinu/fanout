@@ -82,6 +82,20 @@ html.drawer-resizing{ user-select:none; cursor:col-resize; }
   display:flex; align-items:center; gap:8px; flex-wrap:wrap;
   font-family:var(--f-code);
 }
+/* stack map: 見出し → 層(上の層ほど上)→ trunk。左罫が層を 1 本の柱につなぎ、
+   trunk の角で閉じる。層の行は .d-prs li の flex をそのまま使う。 */
+.d-prs li.d-stack{ display:block; }
+.d-stack-head{ color:var(--ink-60); font-size:11.5px; margin-bottom:6px; }
+.d-stack-layers{
+  list-style:none; display:flex; flex-direction:column; gap:6px;
+  margin-left:5px; padding:2px 0 4px 12px;
+  border-left:2px solid var(--suna);
+}
+.d-stack-pos{ min-width:1.4em; text-align:right; color:var(--ink-40); }
+.d-stack-layer.self .d-stack-pos,
+.d-stack-self{ color:var(--asagi); }
+.d-stack-trunk{ margin-left:5px; color:var(--ink-40); font-size:11.5px; }
+.d-stack-trunk::before{ content:"└─ "; color:var(--suna); }
 .d-prompt{
   font-family:var(--f-code); font-size:12px; line-height:1.9;
   color:var(--ink-78);

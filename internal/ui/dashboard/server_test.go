@@ -30,6 +30,8 @@ func (fakeGH) Waves(parent string, recordedNums []int) (sessionview.WaveGraph, e
 	return sessionview.WaveGraph{}, nil
 }
 
+func (fakeGH) PRStacks(nums []int) (map[int]*ghissue.PRStack, error) { return nil, nil }
+
 // newTestServer binds an ephemeral server in a temp project root with no state
 // file (empty snapshot) and runs it until the test ends.
 func newTestServer(t *testing.T, token string) *Server {

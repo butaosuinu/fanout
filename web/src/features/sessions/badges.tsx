@@ -3,6 +3,7 @@ import { prUrl } from "../../shared/github";
 import type { PRRef } from "../../transport/types";
 import { GhLink, Tag } from "../../ui/Tag";
 import { prDisplayState, prHasConflict, prReviewValue } from "./pane";
+import type { StackView } from "./stack";
 
 /* agentState の 6 値契約(sessionview normalizeAgentState の許可リスト)ごとの
  * タグ色。進行中(running / working)はアンバー、plan は浅葱、blocked は赤、
@@ -119,4 +120,17 @@ export function PrReviewTag({ pr }: { pr: PRRef }) {
   const value = prReviewValue(pr);
   if (value === "none" || value === prDisplayState(pr)) return null;
   return <Tag>{value}</Tag>;
+}
+
+/* stacked PR の位置(pr 列用)。「⧉ 2/3」は 3 層中の 2 層目で、1 が base に最も
+ * 近い。推定連鎖は GitHub の stack ではないので、title でそう言う。 */
+export function StackTag({ stack }: { stack: StackView | null }) {
+  const { t } = useLingui();
+  if (!stack) return null;
+  const { number, size, position, baseRef } = stack;
+  const title =
+    stack.kind === "native"
+      ? t`stack #${number} · ${size} 層中 ${position} 層目 → ${baseRef}`
+      : t`base 連鎖(推定)· ${size} 層中 ${position} 層目 → ${baseRef}`;
+  return <Tag title={title}>{`⧉ ${position}/${size}`}</Tag>;
 }

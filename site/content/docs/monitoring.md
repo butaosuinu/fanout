@@ -124,7 +124,9 @@ The dashboard also shows the PR link and CI status for a Prompt Session when a P
 
 The `pr` column carries the review state of that row's PR, using the same vocabulary as the TUI: `merged`, `closed`, `draft`, `approved`, `changes-requested`, `review-required`, `open`. Next to it, a `conflict` tag marks a PR that conflicts with its base branch, and a comment count covers conversation comments plus inline review comments. The detail drawer repeats all three for every PR on the row, not just the primary one. A conflict tag only appears when GitHub reports one: merged and closed PRs never carry mergeability, and neither does an open PR in the seconds after a base push while GitHub recomputes.
 
-Anything the column shows can be typed back into the filter. `pr:` takes both the lifecycle state (`open`, `closed`, `merged`) and the label on the pill (`approved`, `changes-requested`, `review-required`, `draft`), and free-text `conflict` finds the rows carrying that tag.
+A PR in a stacked pull request gets a `⧉ 2/3` tag in the `pr` column: layer 2 of 3, counting from the base branch. The detail drawer draws the stack as one column, top layer first and the base branch at the bottom. This row's PRs keep their usual tags and a `◀ this Session` marker, a layer owned by another row shows that row's name, and a layer no row owns shows its state pill only. GitHub's native stacked pull requests are read from GitHub about once a minute. An open PR whose base branch is the head branch of another open PR on the dashboard, in the same repository, is drawn the same way as an inferred chain. The heading says so, and a branch with two PRs stacked on it, or with two open PRs from it, ends the chain.
+
+Anything the column shows, apart from the stack tag, can be typed back into the filter. `pr:` takes both the lifecycle state (`open`, `closed`, `merged`) and the label on the pill (`approved`, `changes-requested`, `review-required`, `draft`), and free-text `conflict` finds the rows carrying that tag.
 
 `review:` is the separate axis, because review state and lifecycle state are different questions: `pr:open` asks where the PR sits in its lifecycle, `review:approved` asks whether it passed review — and an approved PR still matches `review:approved` after it merges, where the pill has collapsed to `merged`. `review:` takes `approved`, `changes-requested`, `review-required`, and `none`. Both keys are dashboard filters; the TUI has its own filter grammar and does not accept `review:`.
 
@@ -139,6 +141,8 @@ The caret opens the strategy menu — squash, merge commit, or rebase. Picking o
 Once the PR is merged, a **Delete branch** button appears next to it in the detail drawer, the way GitHub's own does. It removes the branch on GitHub only — your worktree and its local branch stay put, and `--cleanup` still owns those. It is skipped for a fork's branch, and for a branch that moved after the merge. That check is not atomic — GitHub has no conditional ref delete — so it catches a push that already landed, not one that lands between the check and the delete.
 
 The button greys out, with the reason, when the merge cannot work: no pull request on the row, already merged, closed, still a draft, or conflicting with its base branch. A failing check or an unfinished review does not disable it — whether those block a merge is your branch protection's call, so the button stays live and shows a warning in the menu instead. If GitHub declines, the error says so and the PR is untouched.
+
+Neither button accounts for stacks. On GitHub, merging a layer also merges the unmerged layers below it, so merge a stack from the bottom layer up.
 
 The dashboard sends the PR number and the head commit it drew, and the server passes that commit to GitHub as `--match-head-commit`. A PR that received a push between the page rendering and your click is refused rather than merged blind.
 

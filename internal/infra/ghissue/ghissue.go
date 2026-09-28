@@ -84,6 +84,10 @@ type PRRef struct {
 	// PR list is not proof that the PR lives here — and `gh pr merge <N> -R <this
 	// repo>` would resolve that number against the wrong repository.
 	BaseRepo string `json:"baseRepo,omitempty"`
+	// Stack is the pull request's GitHub-native stack, when it belongs to one.
+	// Only the dashboard poller fills it (see PRStacks); every other path leaves
+	// it nil. A pointer, so omitempty drops it and existing JSON stays unchanged.
+	Stack *PRStack `json:"stack,omitempty"`
 }
 
 func (pr PRRef) DisplayState() string {
@@ -725,7 +729,7 @@ func parseIssueDetailsBatch(out []byte, nums []int) (map[int]IssueSnapshot, []in
 	var loadErr error
 	globalError := false
 	for _, graphErr := range root.Errors {
-		alias := issueAliasFromPath(graphErr.Path)
+		alias := aliasFromPath(graphErr.Path, "issue_")
 		if alias == "" {
 			globalError = true
 			loadErr = errors.Join(loadErr, fmt.Errorf("gh api graphql issue batch: %s", graphErr.Message))
@@ -779,10 +783,10 @@ func parseIssueDetailsBatch(out []byte, nums []int) (map[int]IssueSnapshot, []in
 	return snapshots, fallback, loadErr
 }
 
-func issueAliasFromPath(path []json.RawMessage) string {
+func aliasFromPath(path []json.RawMessage, prefix string) string {
 	for _, raw := range path {
 		var field string
-		if err := json.Unmarshal(raw, &field); err == nil && strings.HasPrefix(field, "issue_") {
+		if err := json.Unmarshal(raw, &field); err == nil && strings.HasPrefix(field, prefix) {
 			return field
 		}
 	}

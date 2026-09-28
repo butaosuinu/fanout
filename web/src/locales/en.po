@@ -157,6 +157,10 @@ msgstr "No active sessions"
 msgid "ブランチを削除"
 msgstr "Delete branch"
 
+#: src/features/sessions/badges.tsx
+msgid "base 連鎖(推定)· {size} 層中 {position} 層目 → {baseRef}"
+msgstr "Inferred base chain · layer {position} of {size} → {baseRef}"
+
 #: src/features/drawer/Drawer.tsx
 #: src/features/sessions/SessionSection.tsx
 msgid "変更を表示"
@@ -368,6 +372,10 @@ msgstr "The merge timed out. Check its state on GitHub"
 msgid "表示中の差分より PR が進んでいます。再取得してから実行してください"
 msgstr "The pull request has moved past the diff shown here. Reload it before merging"
 
+#: src/features/drawer/StackMap.tsx
+msgid "stack #{number} → {baseRef} · {size} 層"
+msgstr "stack #{number} → {baseRef} · {size} layers"
+
 #: src/features/merge/merge.ts
 msgid "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
 msgstr "The diff shown includes uncommitted changes. Commit and push them first."
@@ -422,6 +430,10 @@ msgstr "The patch does not cover everything under review — it is incomplete"
 #: src/features/sessions/badges.tsx
 msgid "base branch と競合しています"
 msgstr "Conflicts with the base branch"
+
+#: src/features/drawer/StackMap.tsx
+msgid "◀ この Session"
+msgstr "◀ this Session"
 
 #: src/features/merge/merge.ts
 msgid "表示中の差分を取得できていません。再取得してから実行してください"
@@ -591,6 +603,14 @@ msgstr "Search {key} options"
 #: src/features/settings/SettingsModal.tsx
 msgid "設定"
 msgstr "Settings"
+
+#: src/features/drawer/StackMap.tsx
+msgid "base 連鎖(推定)→ {baseRef} · {size} 層"
+msgstr "Inferred base chain → {baseRef} · {size} layers"
+
+#: src/features/sessions/badges.tsx
+msgid "stack #{number} · {size} 層中 {position} 層目 → {baseRef}"
+msgstr "stack #{number} · layer {position} of {size} → {baseRef}"
 
 #: src/app/App.tsx
 msgid "差分ビュアーを読み込めませんでした。ダッシュボードを再起動した直後だと、開いたままのページが古いスクリプトを指していることがあります。"
