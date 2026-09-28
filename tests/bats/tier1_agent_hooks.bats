@@ -1063,9 +1063,9 @@ PROBE
   [[ "$output" == *"UnderBudget"* ]]
 }
 
-# go_finding FILE RULE TEXT — one SARIF result as golangci-lint emits it.
+# go_finding FILE RULE TEXT [LINE] — one SARIF result as golangci-lint emits it.
 go_finding() {
-  printf '{"ruleId":"%s","message":{"text":"%s"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"%s"},"region":{"startLine":3}}}]}' "$2" "$3" "$1"
+  printf '{"ruleId":"%s","message":{"text":"%s"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"%s"},"region":{"startLine":%s}}}]}' "$2" "$3" "$1" "${4:-3}"
 }
 
 @test "complexity-diff: a same-package move of an over-budget func is not new" {
@@ -1118,6 +1118,45 @@ go_finding() {
   run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+@test "complexity-diff: funlen reads a receiver that spans several lines" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-multiline"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # funlen reports the ") Run() {" line; the unchanged method moves a.go -> b.go.
+  printf 'package pkg\n\nfunc (\n\ta *A,\n) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (\n\ta *A,\n) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: funlen keys an init method by receiver, a plain init by file" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-method"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A).init moves a.go -> b.go unchanged; x.go's plain init shrinks while c.go gains one.
+  printf 'package pkg\n\nfunc (a *A) init() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc init() {}\n' >"$dir/base/pkg/x.go"
+  printf 'package pkg\n\nfunc (a *A) init() {}\n' >"$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc init() {}\n' >"$dir/cur/pkg/c.go"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'init' is too long (70 > 60)")" \
+    "$(go_finding pkg/x.go funlen "Function 'init' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'init' is too long (70 > 60)")" \
+    "$(go_finding pkg/c.go funlen "Function 'init' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"pkg/b.go"* ]] || false
+  [[ "$output" == *"pkg/c.go:3:"* ]]
 }
 
 @test "complexity-diff: a second over-budget init in another file is new" {

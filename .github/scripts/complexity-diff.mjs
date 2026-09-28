@@ -217,8 +217,9 @@ const normalizeText = (rule, text) => {
 // パッケージ内で既存の関数を別ファイルへ移しただけで新規違反に化ける。
 //
 // 例外が 2 つある。
-// - init と _ はパッケージ内に何個でも宣言できるのでファイル単位のまま。パッケージで
+// - 関数の init と _ はパッケージ内に何個でも宣言できるのでファイル単位のまま。パッケージで
 //   鍵にすると、ある init の base 値が別ファイルの新しい init を吸収する。
+//   receiver 付きの init メソッドは一意なので例外にしない。
 // - funlen の本文は receiver を書かない ("Function 'Run' is too long")。測った木の
 //   宣言行から receiver を読んで鍵に足し、(*A).Run が (*B).Run を吸収しないようにする。
 //   読めなければファイル単位へ退避する (取りこぼすより新規扱いのほうがまし)。
@@ -243,11 +244,21 @@ const sourceLines = (file) => {
   }
   return sourceCache.get(file);
 };
-// receiverOf は宣言行の receiver 型名を返す。関数なら ""、判定できなければ null。
+// receiverOf は報告行を含む宣言の receiver 型名を返す。関数なら ""、判定できなければ
+// null。receiver が複数行にまたがると funlen はメソッド名の行 (") Run() {") を報告する
+// ので、func 行まで遡ってから receiver を読む。
 const receiverOf = (r) => {
   if (!r.tree || typeof r.line !== "number") return null;
-  const decl = sourceLines(path.resolve(r.tree, r.file))?.[r.line - 1];
-  if (decl === undefined || !/^func\b/.test(decl)) return null;
+  const lines = sourceLines(path.resolve(r.tree, r.file));
+  if (!lines || r.line < 1 || r.line > lines.length) return null;
+  let start = r.line - 1;
+  while (start >= 0 && !/^func\b/.test(lines[start])) {
+    // receiver の途中の行は字下げか ")" で始まる。別の宣言に出たら諦める。
+    if (start < r.line - 1 && /^[^\s)]/.test(lines[start])) return null;
+    start--;
+  }
+  if (start < 0) return null;
+  const decl = lines.slice(start, r.line).join("\n");
   if (!/^func\s*\(/.test(decl)) return "";
   const m = /^func\s*\(\s*(?:\w+\s+)?\*?\s*(\w+)/.exec(decl);
   return m ? m[1] : null;
@@ -255,10 +266,12 @@ const receiverOf = (r) => {
 const location = (r) => {
   const file = baseName(r.file);
   if (!file.endsWith(".go") || !PACKAGE_KEYED_RULES.has(r.rule)) return file;
-  if (REPEATABLE_FUNCS.has(funcName(r))) return file;
-  if (r.rule !== "funlen") return path.dirname(file);
+  // gocognit/gocyclo はメソッドを "(*A).init" と書くので、ここで当たるのは関数だけ。
+  if (r.rule !== "funlen") return REPEATABLE_FUNCS.has(funcName(r)) ? file : path.dirname(file);
+  // funlen はメソッドでも "Function 'init'" と書くので、receiver が無いときだけ例外にする。
   const recv = baseRoot ? receiverOf(r) : null;
-  return recv === null ? file : `${path.dirname(file)}|${recv}`;
+  if (recv === null || (recv === "" && REPEATABLE_FUNCS.has(funcName(r)))) return file;
+  return `${path.dirname(file)}|${recv}`;
 };
 const identity = (r) => `${location(r)}|${r.rule}|${normalizeText(r.rule, r.text)}`;
 const measured = (r) => {

@@ -157,10 +157,10 @@ finding は、ファイルではなくディレクトリ (リネームを寄せ�
 識別する。Go の関数名はパッケージ内で一意で、メソッドは `gocognit` / `gocyclo` の
 本文に receiver が載る。ファイルで識別すると、同じパッケージ内で既存の関数を別ファイルへ
 移しただけで新規違反に化ける。`funlen` の本文は receiver を書かないので、測った木
-(current は working tree、ベースラインは展開した merge base) の宣言行から receiver を
-読んで鍵に足す。読めなければその finding はファイル単位で識別する。ベースラインの木を
+(current は working tree、ベースラインは展開した merge base) の宣言から receiver を
+読んで鍵に足す。receiver が複数行にまたがる宣言も読む。読めなければその finding はファイル単位で識別する。ベースラインの木を
 渡さない編集フックでは、両側とも `funlen` をファイル単位で識別する。パッケージ内に
-複数宣言できる `init` と `_` もファイル単位のまま。`nestif`・`dupl` と TypeScript の
+複数宣言できる関数の `init` と `_` もファイル単位のまま (receiver 付きのメソッドは除く)。`nestif`・`dupl` と TypeScript の
 ルールはファイル単位。
 
 **ESLint の exit 1 は「違反あり」であって失敗ではない。** `&&` で繋ぐと、ベース側に
