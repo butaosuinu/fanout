@@ -152,21 +152,38 @@ func wrapOwnedError(wrap func(error) error, err error) error {
 	return wrap(err)
 }
 
-// withOwned acquires the lane's admission, holds the ownership lock, probes
-// the exact route, and runs fn. fn's error is returned unchanged.
-func (b *Backend) withOwned(ctx context.Context, lane ownedLane, wrap ownedErrors, fn func(ownedCall) error) error {
+// withOwnedAdmission acquires the lane's admission and holds the ownership
+// lock around fn without probing, so call.probed is zero. It serves callers
+// whose first step after admission is not a probe (target resolution probes
+// on its own), keeping their command sequence exact. fn's error is returned
+// unchanged.
+func (b *Backend) withOwnedAdmission(ctx context.Context, lane ownedLane, wrapAcquire func(error) error, fn func(ownedCall) error) error {
 	acquire := b.acquireOwnedOperation
 	if lane == ownedMutationLane {
 		acquire = b.acquireOwnedMutation
 	}
 	admission, lock, err := acquire(ctx)
 	if err != nil {
-		return wrapOwnedError(wrap.acquire, err)
+		return wrapOwnedError(wrapAcquire, err)
 	}
 	defer unlockPrivateFile(lock)
-	probed, err := b.probeOwned(ctx, admission)
-	if err != nil {
-		return wrapOwnedError(wrap.probe, err)
-	}
-	return fn(ownedCall{b: b, admission: admission, probed: probed})
+	return fn(ownedCall{b: b, admission: admission})
+}
+
+// withOwned acquires the lane's admission, holds the ownership lock, probes
+// the exact route, and runs fn. fn's error is returned unchanged.
+func (b *Backend) withOwned(ctx context.Context, lane ownedLane, wrap ownedErrors, fn func(ownedCall) error) error {
+	return b.withOwnedAdmission(ctx, lane, wrap.acquire, func(call ownedCall) error {
+		probed, err := call.probe(ctx)
+		if err != nil {
+			return wrapOwnedError(wrap.probe, err)
+		}
+		call.probed = probed
+		return fn(call)
+	})
+}
+
+// probe re-probes the admitted route; it does not update call.probed.
+func (c ownedCall) probe(ctx context.Context) (probeResult, error) {
+	return c.b.probeOwned(ctx, c.admission)
 }

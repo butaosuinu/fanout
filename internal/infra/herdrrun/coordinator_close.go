@@ -68,7 +68,7 @@ func (c *coordinatorCloser) close(ctx context.Context, req corebackend.CloseRequ
 			}
 			return err
 		}
-		return c.waitCoordinatorAbsent(ctx, call.admission)
+		return c.waitCoordinatorAbsent(ctx, call)
 	})
 	if err != nil {
 		return failed, err
@@ -80,7 +80,7 @@ func (c *coordinatorCloser) admitLauncherEOF(ctx context.Context, call ownedCall
 	if processErr := c.verifyLauncherEOFProcess(ctx, call.probed, call.admission.marker.LauncherPath); processErr != nil {
 		return probeResult{}, processErr
 	}
-	target, probed, view, err := c.resolveOwnedTargetView(ctx, call.admission, c.target.target)
+	target, probed, view, err := call.resolveOwnedTargetView(ctx, c.target.target)
 	if err != nil {
 		return probeResult{}, err
 	}
@@ -105,9 +105,9 @@ func (c *coordinatorCloser) verifyLauncherEOFProcess(ctx context.Context, probed
 	return corebackend.VerifyLauncherProcess(info, target.CurrentPath, launcherPath)
 }
 
-func (c *coordinatorCloser) waitCoordinatorAbsent(ctx context.Context, admission ownedAdmission) error {
+func (c *coordinatorCloser) waitCoordinatorAbsent(ctx context.Context, call ownedCall) error {
 	for {
-		view, err := c.ownedSnapshotView(ctx, admission)
+		view, err := call.ownedSnapshotView(ctx)
 		if err != nil {
 			return err
 		}
