@@ -78,15 +78,16 @@ func (s *OwnedSession) verifiedAttachMarker() (ownerMarker, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*commandTimeout)
 	defer cancel()
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	var marker ownerMarker
+	wrap := ownedErrors{probe: func(err error) error { return fmt.Errorf("verify herdr owned session before attach: %w", err) }}
+	err := s.backend.withOwned(ctx, ownedOperationLane, wrap, func(call ownedCall) error {
+		marker = call.admission.marker
+		return nil
+	})
 	if err != nil {
 		return ownerMarker{}, err
 	}
-	defer unlockPrivateFile(lock)
-	if _, err := s.backend.probeOwned(ctx, admission); err != nil {
-		return ownerMarker{}, fmt.Errorf("verify herdr owned session before attach: %w", err)
-	}
-	return admission.marker, nil
+	return marker, nil
 }
 
 func attachAssignments(m ownerMarker) [][2]string {
