@@ -304,16 +304,10 @@ For every changed or reviewed path, resolve the applicable base-side instruction
 chain, including the repository-root and every nearer `AGENTS.md` or
 `AGENTS.override.md` in normal precedence. Apply its `## Code Review Rules`
 sections to findings affecting that path, never a copy changed by the target.
-A finding is actionable only when a concrete trigger is reachable under
-documented user-facing prerequisites, or it violates an existing test, issue
-acceptance criterion, documented contract, or required safe rejection or
-fail-closed behavior. Do not request new support for an unpromised environment.
-An explicitly accepted unsupported input and its required safe rejection remain
-in scope.
 
-Reject a finding only with concrete evidence that the trigger is unreachable,
-the behavior is an explicit non-goal, or the applicable contract is already
-satisfied. Reply with the base-side scope rule and that evidence. If every
+Use [Triage review findings before fixing](../SKILL.md#triage-review-findings-before-fixing)
+for acceptance and rejection criteria. Reply with the base-side scope rule and
+concrete evidence for every rejected finding. If every
 finding in the current-head batch is rejected, do not edit, commit, or push;
 continue readiness checks with no actionable review work. This does not satisfy
 `CHANGES_REQUESTED` or a required approval. Reconsider a rejection when a new
