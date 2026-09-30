@@ -258,8 +258,13 @@ const receiverOf = (r) => {
     start--;
   }
   if (start < 0) return null;
-  const decl = lines.slice(start, r.line).join("\n");
-  if (!/^func\s*\(/.test(decl)) return "";
+  // gofmt は func と receiver の間のコメントも残すので、読む前に落とす。
+  const decl = lines
+    .slice(start, r.line)
+    .join("\n")
+    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, " ");
+  // 関数と確かに読めたときだけ ""。どちらとも読めなければ null でファイル単位へ退避する。
+  if (/^func\s+\w+\s*[[(]/.test(decl)) return "";
   const m = /^func\s*\(\s*(?:\w+\s+)?\*?\s*(\w+)/.exec(decl);
   return m ? m[1] : null;
 };
