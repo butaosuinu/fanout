@@ -1471,6 +1471,89 @@ init_findings() {
   [ -z "$output" ]
 }
 
+# init_sarif OUT FILE... — a SARIF holding init_findings for each pkg/FILE, in the given order.
+init_sarif() {
+  local out="$1" results="" f
+  shift
+  for f in "$@"; do results="${results:+$results,}$(init_findings "pkg/$f" init)"; done
+  printf '{"runs":[{"results":[%s]}]}' "$results" >"$out"
+}
+
+# init_diff DIR FILE... — runs complexity-diff over DIR's base/cur trees, cur findings in the given order.
+init_diff() {
+  local dir="$1"
+  shift
+  init_sarif "$dir/cur.sarif" "$@"
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+}
+
+@test "complexity-diff: init matching does not depend on the SARIF order" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-order"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # base b:X c:X d:Y -> now a:X (moved in) b:Z (edited) c:Y. Only a->c, b->b, c->d covers all three.
+  local x='package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n'
+  local y='package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(3)\n}\n'
+  printf "$x" >"$dir/base/pkg/b.go"
+  printf "$x" >"$dir/base/pkg/c.go"
+  printf "$y" >"$dir/base/pkg/d.go"
+  printf "$x" >"$dir/cur/pkg/a.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(2)\n}\n' >"$dir/cur/pkg/b.go"
+  printf "$y" >"$dir/cur/pkg/c.go"
+  init_sarif "$dir/base.sarif" b.go c.go d.go
+
+  local order
+  for order in "a.go b.go c.go" "c.go b.go a.go" "b.go a.go c.go"; do
+    # shellcheck disable=SC2086 # word-split the order on purpose
+    init_diff "$dir" $order
+    [ "$status" -eq 0 ] || false
+    [ -z "$output" ] || false
+  done
+}
+
+@test "complexity-diff: ambiguous twin baselines cover a moved and an edited init" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-ambiguous"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # base a:X b:X -> now c:X (moved in, fits either) b:Z (edited, fits only b).
+  local x='package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n'
+  printf "$x" >"$dir/base/pkg/a.go"
+  printf "$x" >"$dir/base/pkg/b.go"
+  printf "$x" >"$dir/cur/pkg/c.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(2)\n}\n' >"$dir/cur/pkg/b.go"
+
+  local base order
+  for base in "a.go b.go" "b.go a.go"; do
+    # shellcheck disable=SC2086 # word-split the order on purpose
+    init_sarif "$dir/base.sarif" $base
+    for order in "c.go b.go" "b.go c.go"; do
+      # shellcheck disable=SC2086
+      init_diff "$dir" $order
+      [ "$status" -eq 0 ] || false
+      [ -z "$output" ] || false
+    done
+  done
+}
+
+@test "complexity-diff: a move does not hide a new init in another file in any order" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-move-new"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # a.go's init moves to b.go unchanged; c.go gains a different over-budget init.
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/base/pkg/a.go"
+  cp "$dir/base/pkg/a.go" "$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(2)\n}\n' >"$dir/cur/pkg/c.go"
+  init_sarif "$dir/base.sarif" a.go
+
+  local order
+  for order in "b.go c.go" "c.go b.go"; do
+    # shellcheck disable=SC2086 # word-split the order on purpose
+    init_diff "$dir" $order
+    [ "$status" -eq 0 ] || false
+    [[ "$output" != *"pkg/b.go"* ]] || false
+    [[ "$output" == *"pkg/c.go:4: cognitive complexity"* ]] || false
+    [[ "$output" == *"pkg/c.go:4: Function 'init'"* ]] || false
+  done
+}
+
 @test "complexity-diff: without --base-root a moved init keeps its file key" {
   local dir="$BATS_TEST_TMPDIR/cx-init-noroot"
   mkdir -p "$dir/pkg"

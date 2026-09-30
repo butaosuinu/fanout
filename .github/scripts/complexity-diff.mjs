@@ -380,48 +380,61 @@ const owned = (r) => OWNED_RULES.has(r.rule);
 const current = readResults(currentPath, root);
 current.results = current.results.filter(owned);
 
-// A finding survives when the baseline has no unconsumed entry that already
-// covered it at an equal or higher value. Consuming greedily keeps duplicate
-// anonymous functions ("Arrow function has too many statements") honest: two in
-// the base absorb two now, a third one survives.
+// A finding survives when the maximum matching between current findings and
+// baseline entries leaves it unmatched. An edge joins a finding to an entry that
+// shares one of its keys at an equal or higher value; each entry covers one
+// finding. Counting instead of set membership keeps duplicate anonymous functions
+// ("Arrow function has too many statements") honest: two in the base absorb two
+// now, a third one survives.
 //
-// A baseline entry is registered under every key it has and consumed once. Keys
-// are tried pass by pass over ALL current findings, so a moved init claims its
-// fingerprint entry before an edited init elsewhere can take it by file key.
-// Across files (the package fingerprint), an entry whose file key a still
-// unmatched finding wants (demand) is taken last, so twin inits do not trade places.
+// Greedy consumption depends on SARIF order: a moved init can take the entry an
+// in-place edit needed, even though another assignment covers both. Kuhn's
+// augmenting paths find a maximum matching, and the findings are visited in a
+// fixed order so the unmatched ones do not depend on the SARIF order either.
+// The first round uses same-file keys only; the second adds the package
+// fingerprint (keys). Augmenting never unmatches a finding, so the same-file
+// preference only breaks ties and cannot shrink the matching.
 let survives;
 if (basePath && fs.existsSync(basePath)) {
   const baseline = new Map();
   for (const r of readResults(basePath, baseRoot).results.filter(owned)) {
-    const ks = keys(r);
-    const entry = { value: measured(r), used: false, fileKey: ks.at(-1) };
-    for (const key of ks) {
+    const entry = { value: measured(r) };
+    for (const key of keys(r)) {
       if (!baseline.has(key)) baseline.set(key, []);
       baseline.get(key).push(entry);
     }
   }
-  // Ascending, so the match below consumes the SMALLEST baseline entry that
-  // still covers the current value. Consuming the largest first would leave a
-  // too-small entry for a later value and report it as new — dupl findings,
-  // whose leading number is a line offset rather than a severity, hit this.
+  // Ascending, so a finding tries the SMALLEST covering entry first. dupl findings,
+  // whose leading number is a line offset rather than a severity, need the
+  // larger entries left for later values.
   for (const entries of baseline.values()) entries.sort((a, b) => a.value - b.value);
+  const order = (r) => `${r.file}\0${String(r.line ?? 0).padStart(9, "0")}\0${r.rule}\0${r.text}`;
+  const pending = current.results
+    .map((r) => {
+      const ks = keys(r);
+      // The package fingerprint is the only cross-file key (the middle of three).
+      const local = ks.length === 3 ? [ks[0], ks[2]] : ks;
+      return { r, local, all: ks, value: measured(r), at: order(r) };
+    })
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  const owner = new Map();
   const matched = new Set();
-  const pending = current.results.map((r) => ({ r, keys: keys(r), value: measured(r) }));
-  const demand = new Map();
-  for (const p of pending) demand.set(p.keys.at(-1), (demand.get(p.keys.at(-1)) ?? 0) + 1);
-  for (let pass = 0; pass < 3; pass++) {
-    for (const p of pending) {
-      // Aligned from the end: a single-key finding only runs in the last (file key) pass.
-      const key = p.keys.at(pass - 3);
-      if (matched.has(p.r.raw) || key === undefined) continue;
-      const covering = (baseline.get(key) ?? []).filter((e) => !e.used && e.value >= p.value);
-      const entry = covering.find((e) => !demand.get(e.fileKey)) ?? covering[0];
-      if (!entry) continue;
-      entry.used = true;
-      matched.add(p.r.raw);
-      demand.set(p.keys.at(-1), demand.get(p.keys.at(-1)) - 1);
+  const augment = (p, round, seen) => {
+    for (const key of p[round]) {
+      for (const e of baseline.get(key) ?? []) {
+        if (e.value < p.value || seen.has(e)) continue;
+        seen.add(e);
+        const q = owner.get(e);
+        if (q && !augment(q, round, seen)) continue;
+        owner.set(e, p);
+        matched.add(p.r.raw);
+        return true;
+      }
     }
+    return false;
+  };
+  for (const round of ["local", "all"]) {
+    for (const p of pending) if (!matched.has(p.r.raw)) augment(p, round, new Set());
   }
   survives = (r) => !matched.has(r.raw);
 } else if (mergeBase) {
