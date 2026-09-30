@@ -1170,6 +1170,23 @@ go_finding() {
   [ -z "$output" ]
 }
 
+@test "complexity-diff: a moved method with a multi-line comment before the receiver is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-block-comment-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # The comment body starts at column 0, which must not read as another declaration.
+  printf 'package pkg\n\nfunc /*\nnote\n*/ (a *A) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc /*\nnote\n*/ (a *A) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "complexity-diff: funlen tells Unicode receivers apart" {
   local dir="$BATS_TEST_TMPDIR/cx-recv-unicode"
   mkdir -p "$dir/base/pkg" "$dir/cur/pkg"

@@ -255,18 +255,16 @@ const receiverOf = (r) => {
   if (!r.tree || typeof r.line !== "number") return null;
   const lines = sourceLines(path.resolve(r.tree, r.file));
   if (!lines || r.line < 1 || r.line > lines.length) return null;
-  let start = r.line - 1;
-  while (start >= 0 && !/^func\b/.test(lines[start])) {
-    // receiver の途中の行は字下げか ")" で始まる。別の宣言に出たら諦める。
-    if (start < r.line - 1 && /^[^\s)]/.test(lines[start])) return null;
-    start--;
-  }
+  const start = lines.slice(0, r.line).findLastIndex((l) => /^func\b/.test(l));
   if (start < 0) return null;
-  // gofmt は func と receiver の間のコメントも残すので、読む前に落とす。
+  // gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
+  // 本文は行頭から始まりうるので、改行を残して空白にしてから行頭を調べる。
   const decl = lines
     .slice(start, r.line)
     .join("\n")
-    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, " ");
+    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
+  // receiver の途中の行は字下げか ")" で始まる。別の宣言をまたいだら諦める。
+  if (decl.split("\n").slice(1, -1).some((l) => /^[^\s)]/.test(l))) return null;
   // 関数と確かに読めたときだけ ""。どちらとも読めなければ null でファイル単位へ退避する。
   if (FUNC_DECL.test(decl)) return "";
   const m = METHOD_DECL.exec(decl);
