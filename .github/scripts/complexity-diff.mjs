@@ -244,6 +244,10 @@ const sourceLines = (file) => {
   }
   return sourceCache.get(file);
 };
+// Go の識別子は Unicode の文字・数字を含む。\w だと (*A日) と (*A月) がどちらも A になる。
+const GO_IDENT = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;
+const FUNC_DECL = new RegExp(String.raw`^func\s+${GO_IDENT}\s*[[(]`, "u");
+const METHOD_DECL = new RegExp(String.raw`^func\s*\(\s*(?:${GO_IDENT}\s+)?\*?\s*(${GO_IDENT})`, "u");
 // receiverOf は報告行を含む宣言の receiver 型名を返す。関数なら ""、判定できなければ
 // null。receiver が複数行にまたがると funlen はメソッド名の行 (") Run() {") を報告する
 // ので、func 行まで遡ってから receiver を読む。
@@ -264,8 +268,8 @@ const receiverOf = (r) => {
     .join("\n")
     .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, " ");
   // 関数と確かに読めたときだけ ""。どちらとも読めなければ null でファイル単位へ退避する。
-  if (/^func\s+\w+\s*[[(]/.test(decl)) return "";
-  const m = /^func\s*\(\s*(?:\w+\s+)?\*?\s*(\w+)/.exec(decl);
+  if (FUNC_DECL.test(decl)) return "";
+  const m = METHOD_DECL.exec(decl);
   return m ? m[1] : null;
 };
 const location = (r) => {

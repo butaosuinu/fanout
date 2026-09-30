@@ -1170,6 +1170,40 @@ go_finding() {
   [ -z "$output" ]
 }
 
+@test "complexity-diff: funlen tells Unicode receivers apart" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-unicode"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A日).Run shrinks under budget while a new long (*A月).Run appears; \w would read both as A.
+  # Non-ASCII goes through %s so the printf format stays ASCII under any locale.
+  printf 'package pkg\n\nfunc (a *%s) Run() {}\n' 'A日' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (a *%s) Run() {}\n' 'A月' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]]
+}
+
+@test "complexity-diff: a moved method with a Unicode receiver is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-unicode-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  printf 'package pkg\n\nfunc (a *%s) Run() {}\n' 'A日' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (a *%s) Run() {}\n' 'A日' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "complexity-diff: funlen keys an init method by receiver, a plain init by file" {
   local dir="$BATS_TEST_TMPDIR/cx-init-method"
   mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
