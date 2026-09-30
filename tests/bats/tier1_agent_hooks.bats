@@ -1380,6 +1380,29 @@ init_findings() {
   [ -z "$output" ]
 }
 
+@test "complexity-diff: a new init does not take the baseline of an init moved out of its file" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-move-out"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # a.go's init moves to b.go unchanged; a.go gains a different, smaller init.
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/base/pkg/a.go"
+  cp "$dir/base/pkg/a.go" "$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(2)\n}\n' >"$dir/cur/pkg/a.go"
+  local moved fresh
+  moved="$(go_finding pkg/b.go gocognit 'cognitive complexity 35 of func `init` is high (> 20)' 4)"
+  fresh="$(go_finding pkg/a.go gocognit 'cognitive complexity 32 of func `init` is high (> 20)' 4)"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go gocognit 'cognitive complexity 35 of func `init` is high (> 20)' 4)" >"$dir/base.sarif"
+  local pair
+  for pair in "$moved,$fresh" "$fresh,$moved"; do
+    printf '{"runs":[{"results":[%s]}]}' "$pair" >"$dir/cur.sarif"
+    run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+      --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+    [ "$status" -eq 0 ] || false
+    [[ "$output" == *"pkg/a.go:4: cognitive complexity 32"* ]] || false
+    [[ "$output" != *"pkg/b.go"* ]] || false
+  done
+}
+
 @test "complexity-diff: a shrunk init does not absorb a new init in another file" {
   local dir="$BATS_TEST_TMPDIR/cx-init-absorb"
   mkdir -p "$dir/base/pkg" "$dir/cur/pkg"

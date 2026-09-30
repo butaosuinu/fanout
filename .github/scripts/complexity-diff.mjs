@@ -394,9 +394,11 @@ current.results = current.results.filter(owned);
 // in-place edit needed, even though another assignment covers both. Kuhn's
 // augmenting paths find a maximum matching, and the findings are visited in a
 // fixed order so the unmatched ones do not depend on the SARIF order either.
-// The first round uses same-file keys only; the second adds the package
-// fingerprint (keys). Augmenting never unmatches a finding, so the same-file
-// preference only breaks ties and cannot shrink the matching.
+// Rounds widen the keys: the same-file fingerprint, then the package
+// fingerprint, then the plain file key (keys). A fingerprint wins before any
+// plain file key, so a new init cannot take the entry of an unchanged init moved
+// out of its file. Augmenting never unmatches a finding, so the preference only
+// breaks ties and cannot shrink the matching.
 let survives;
 if (basePath && fs.existsSync(basePath)) {
   const baseline = new Map();
@@ -415,15 +417,15 @@ if (basePath && fs.existsSync(basePath)) {
   const pending = current.results
     .map((r) => {
       const ks = keys(r);
-      // The package fingerprint is the only cross-file key (the middle of three).
-      const local = ks.length === 3 ? [ks[0], ks[2]] : ks;
-      return { r, local, all: ks, value: measured(r), at: order(r) };
+      // Every key but the last (the plain file key) is a fingerprint.
+      const fps = ks.slice(0, -1);
+      return { r, rounds: [fps.slice(0, 1), fps, ks], value: measured(r), at: order(r) };
     })
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   const owner = new Map();
   const matched = new Set();
   const augment = (p, round, seen) => {
-    for (const key of p[round]) {
+    for (const key of p.rounds[round]) {
       for (const e of baseline.get(key) ?? []) {
         if (e.value < p.value || seen.has(e)) continue;
         seen.add(e);
@@ -436,7 +438,7 @@ if (basePath && fs.existsSync(basePath)) {
     }
     return false;
   };
-  for (const round of ["local", "all"]) {
+  for (const round of [0, 1, 2]) {
     for (const p of pending) if (!matched.has(p.r.raw)) augment(p, round, new Set());
   }
   survives = (r) => !matched.has(r.raw);
