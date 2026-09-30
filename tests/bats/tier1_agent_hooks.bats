@@ -1403,6 +1403,25 @@ init_findings() {
   done
 }
 
+@test "complexity-diff: a raw string line-start brace does not end a moved init" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-raw-brace"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # A raw string holds a line-start "}"; b.go moves it unchanged, c.go edits a line after it.
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\ts := `\n}\n`\n\tsetup(s, 1)\n}\n' >"$dir/base/pkg/a.go"
+  cp "$dir/base/pkg/a.go" "$dir/base/pkg/d.go"
+  cp "$dir/base/pkg/a.go" "$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\ts := `\n}\n`\n\tsetup(s, 2)\n}\n' >"$dir/cur/pkg/c.go"
+  printf '{"runs":[{"results":[%s,%s]}]}' "$(init_findings pkg/a.go init)" "$(init_findings pkg/d.go init)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' "$(init_findings pkg/b.go init)" "$(init_findings pkg/c.go init)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"pkg/b.go"* ]] || false
+  [[ "$output" == *"pkg/c.go:4: cognitive complexity"* ]] || false
+  [[ "$output" == *"pkg/c.go:4: Function 'init'"* ]]
+}
+
 @test "complexity-diff: a shrunk init does not absorb a new init in another file" {
   local dir="$BATS_TEST_TMPDIR/cx-init-absorb"
   mkdir -p "$dir/base/pkg" "$dir/cur/pkg"

@@ -235,23 +235,25 @@ const funcName = (r) => {
 };
 // gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
 // 本文は行頭から始まりうるので、改行を残して空白にする。文字列と rune は読み飛ばして残す
-// ("http://x" の // をコメントと取り違えないため)。
+// ("http://x" の // をコメントと取り違えないため)。literals を立てるとリテラルも同じく空白にする。
 const GO_LITERAL = /"(?:[^"\\\n]|\\.)*"|`[^`]*`|'(?:[^'\\\n]|\\.)*'/.source;
-const blankComments = (s) =>
+const blankComments = (s, literals = false) =>
   s.replace(new RegExp(String.raw`${GO_LITERAL}|\/\*[\s\S]*?\*\/|\/\/[^\n]*`, "g"), (c) =>
-    c.startsWith("/") ? c.replace(/[^\n]/g, " ") : c,
+    literals || c.startsWith("/") ? c.replace(/[^\n]/g, " ") : c,
   );
 // stripSpace は文字列と rune の外の空白だけを抜く ("a b" と "ab" を同じ指紋にしないため)。
 const stripSpace = (s) =>
   s.replace(new RegExp(String.raw`${GO_LITERAL}|\s+`, "g"), (c) => (/^\s/.test(c) ? "" : c));
-// sourceLines はファイルをコメント抜きの行で返す。コメント中の行頭 "func" / "}" を宣言の
-// 始まり・終わりと取り違えないよう、ファイル全体で先に落とす。
+// sourceLines はファイルをコメント抜きの行 (text) と、リテラルも空白にした行 (shape) で返す。
+// コメントや raw string 中の行頭 "func" / "}" を宣言の始まり・終わりと取り違えないよう、
+// 宣言の範囲は shape で探す。行の数と位置は両方で同じ。
 const sourceCache = new Map();
 const sourceLines = (file) => {
   if (!sourceCache.has(file)) {
     let lines = null;
     try {
-      lines = blankComments(fs.readFileSync(file, "utf8")).split("\n");
+      const src = fs.readFileSync(file, "utf8");
+      lines = { text: blankComments(src).split("\n"), shape: blankComments(src, true).split("\n") };
     } catch {
       /* 読めなければ receiver 不明として扱う */
     }
@@ -285,7 +287,7 @@ const declText = (lines, end) => {
 // ので、func 行まで遡ってから receiver を読む。
 const receiverOf = (r) => {
   if (!r.tree || typeof r.line !== "number") return null;
-  const lines = sourceLines(path.resolve(r.tree, r.file));
+  const lines = sourceLines(path.resolve(r.tree, r.file))?.shape;
   if (!lines || r.line < 1 || r.line > lines.length) return null;
   const decl = declText(lines, r.line);
   if (decl === null) return null;
@@ -308,12 +310,12 @@ const location = (r) => {
 // 空白を詰めるだけだと、f(/* c */ 1) のコメント跡が f( 1) と残って f(1) と別物になる。
 // func と名前の間に複数行コメントがあると報告行は名前の行なので、func 行まで遡る。
 // gofmt 済みのトップレベル関数は行頭の "}" で閉じる (1 行の関数は報告行で閉じる)。
+// 範囲はリテラルを空白にした shape で探し、指紋はリテラルを残した text から読む。
 // 宣言を読めない・閉じが見つからないときは null。
-// ponytail: 行頭に "func" / "}" を書いた raw string があるとそこで切れる。切れた先の編集は指紋に
-// 出ないが、値の比較は残る。字句解析が要るほどの差ではない。
 const fingerprintOf = (r) => {
   if (!r.tree || typeof r.line !== "number") return null;
-  const lines = sourceLines(path.resolve(r.tree, r.file));
+  const src = sourceLines(path.resolve(r.tree, r.file));
+  const lines = src?.shape;
   if (!lines || r.line < 1 || r.line > lines.length) return null;
   const head = declText(lines, r.line);
   if (head === null) return null;
@@ -321,7 +323,7 @@ const fingerprintOf = (r) => {
   const at = r.line - 1;
   const end = /\}\s*$/.test(head) ? at : lines.findIndex((l, i) => i > at && /^\}/.test(l));
   if (end < 0) return null;
-  const decl = stripSpace(lines.slice(start, end + 1).join("\n"));
+  const decl = stripSpace(src.text.slice(start, end + 1).join("\n"));
   return createHash("sha256").update(decl).digest("hex");
 };
 // receiver の無い init / _ か。funlen はメソッドでも同じ本文なので宣言を読む。
