@@ -247,7 +247,27 @@ const sourceLines = (file) => {
 // Go の識別子は Unicode の文字・数字を含む。\w だと (*A日) と (*A月) がどちらも A になる。
 const GO_IDENT = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;
 const FUNC_DECL = new RegExp(String.raw`^func\s+${GO_IDENT}\s*[[(]`, "u");
-const METHOD_DECL = new RegExp(String.raw`^func\s*\(\s*(?:${GO_IDENT}\s+)?\*?\s*(${GO_IDENT})`, "u");
+// 型名の直後が receiver の終わり (")" / 複数行の "," / 型引数の "[") でなければ読まない。
+// (a *(A)) で変数名 a を型名と取り違えないため。
+const METHOD_DECL = new RegExp(
+  String.raw`^func\s*\(\s*(?:${GO_IDENT}\s+)?\*?\s*(${GO_IDENT})(?=\s*[),[])`,
+  "u",
+);
+// gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
+// 本文は行頭から始まりうるので、改行を残して空白にする。
+const blankComments = (s) =>
+  s.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
+// declText は end 行で終わる宣言を func 行から読み、コメントを空白にして返す。
+// コメント中の行頭 "func" を拾うと閉じ "*/" だけが残るので、さらに前の func 行を探す。
+const declText = (lines, end) => {
+  for (let stop = end; ; ) {
+    const start = lines.slice(0, stop).findLastIndex((l) => /^func\b/.test(l));
+    if (start < 0) return null;
+    const decl = blankComments(lines.slice(start, end).join("\n"));
+    if (!decl.includes("*/")) return decl;
+    stop = start;
+  }
+};
 // receiverOf は報告行を含む宣言の receiver 型名を返す。関数なら ""、判定できなければ
 // null。receiver が複数行にまたがると funlen はメソッド名の行 (") Run() {") を報告する
 // ので、func 行まで遡ってから receiver を読む。
@@ -255,14 +275,8 @@ const receiverOf = (r) => {
   if (!r.tree || typeof r.line !== "number") return null;
   const lines = sourceLines(path.resolve(r.tree, r.file));
   if (!lines || r.line < 1 || r.line > lines.length) return null;
-  const start = lines.slice(0, r.line).findLastIndex((l) => /^func\b/.test(l));
-  if (start < 0) return null;
-  // gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
-  // 本文は行頭から始まりうるので、改行を残して空白にしてから行頭を調べる。
-  const decl = lines
-    .slice(start, r.line)
-    .join("\n")
-    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
+  const decl = declText(lines, r.line);
+  if (decl === null) return null;
   // receiver の途中の行は字下げか ")" で始まる。別の宣言をまたいだら諦める。
   if (decl.split("\n").slice(1, -1).some((l) => /^[^\s)]/.test(l))) return null;
   // 関数と確かに読めたときだけ ""。どちらとも読めなければ null でファイル単位へ退避する。
