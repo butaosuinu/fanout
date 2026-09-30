@@ -1347,6 +1347,39 @@ init_findings() {
   [ -z "$output" ]
 }
 
+@test "complexity-diff: a moved init whose string literal changed only in spacing is new" {
+  local lit i=0
+  # Interpreted and raw strings: "a b" -> "ab" is an edit, not blank space.
+  for lit in '"a b"|"ab"' '`a b`|`ab`'; do
+    local dir="$BATS_TEST_TMPDIR/cx-init-literal-$((i++))"
+    mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+    printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(%s)\n}\n' "${lit%%|*}" >"$dir/base/pkg/a.go"
+    printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(%s)\n}\n' "${lit#*|}" >"$dir/cur/pkg/b.go"
+    printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/a.go init)" >"$dir/base.sarif"
+    printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/b.go init)" >"$dir/cur.sarif"
+
+    run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+      --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+    [ "$status" -eq 0 ] || false
+    [[ "$output" == *"pkg/b.go:4: cognitive complexity"* ]] || false
+    [[ "$output" == *"pkg/b.go:4: Function 'init'"* ]] || false
+  done
+}
+
+@test "complexity-diff: a moved init with string literals ignores blank space outside them" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-literal-space"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup("a b", `c d`)\n}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup( "a b",/* c */`c d` ) // moved\n}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/a.go init)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/b.go init)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "complexity-diff: a shrunk init does not absorb a new init in another file" {
   local dir="$BATS_TEST_TMPDIR/cx-init-absorb"
   mkdir -p "$dir/base/pkg" "$dir/cur/pkg"

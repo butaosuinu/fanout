@@ -236,10 +236,14 @@ const funcName = (r) => {
 // gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
 // 本文は行頭から始まりうるので、改行を残して空白にする。文字列と rune は読み飛ばして残す
 // ("http://x" の // をコメントと取り違えないため)。
+const GO_LITERAL = /"(?:[^"\\\n]|\\.)*"|`[^`]*`|'(?:[^'\\\n]|\\.)*'/.source;
 const blankComments = (s) =>
-  s.replace(/"(?:[^"\\\n]|\\.)*"|`[^`]*`|'(?:[^'\\\n]|\\.)*'|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) =>
+  s.replace(new RegExp(String.raw`${GO_LITERAL}|\/\*[\s\S]*?\*\/|\/\/[^\n]*`, "g"), (c) =>
     c.startsWith("/") ? c.replace(/[^\n]/g, " ") : c,
   );
+// stripSpace は文字列と rune の外の空白だけを抜く ("a b" と "ab" を同じ指紋にしないため)。
+const stripSpace = (s) =>
+  s.replace(new RegExp(String.raw`${GO_LITERAL}|\s+`, "g"), (c) => (/^\s/.test(c) ? "" : c));
 // sourceLines はファイルをコメント抜きの行で返す。コメント中の行頭 "func" / "}" を宣言の
 // 始まり・終わりと取り違えないよう、ファイル全体で先に落とす。
 const sourceCache = new Map();
@@ -300,7 +304,7 @@ const location = (r) => {
   if (recv === null || (recv === "" && REPEATABLE_FUNCS.has(funcName(r)))) return file;
   return `${path.dirname(file)}|${recv}`;
 };
-// fingerprintOf は報告行を含む func 宣言をコメントと空白を全て抜いて読み、そのハッシュを返す。
+// fingerprintOf は報告行を含む func 宣言をコメントとリテラル外の空白を抜いて読み、そのハッシュを返す。
 // 空白を詰めるだけだと、f(/* c */ 1) のコメント跡が f( 1) と残って f(1) と別物になる。
 // func と名前の間に複数行コメントがあると報告行は名前の行なので、func 行まで遡る。
 // gofmt 済みのトップレベル関数は行頭の "}" で閉じる (1 行の関数は報告行で閉じる)。
@@ -317,7 +321,7 @@ const fingerprintOf = (r) => {
   const at = r.line - 1;
   const end = /\}\s*$/.test(head) ? at : lines.findIndex((l, i) => i > at && /^\}/.test(l));
   if (end < 0) return null;
-  const decl = lines.slice(start, end + 1).join("\n").replace(/\s+/g, "");
+  const decl = stripSpace(lines.slice(start, end + 1).join("\n"));
   return createHash("sha256").update(decl).digest("hex");
 };
 // receiver の無い init / _ か。funlen はメソッドでも同じ本文なので宣言を読む。
