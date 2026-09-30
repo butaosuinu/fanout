@@ -321,8 +321,10 @@ const isRepeatableFunc = (r) =>
   PACKAGE_KEYED_RULES.has(r.rule) &&
   REPEATABLE_FUNCS.has(funcName(r)) &&
   (r.rule !== "funlen" || receiverOf(r) === "");
-// keys は突き合わせる鍵を優先順に返す。init / _ は測った木が両側読めるとき (--base-root あり)
-// パッケージ + 宣言の指紋の鍵を先に試し、当たらなければファイル単位の鍵へ落ちる。
+// keys は突き合わせる鍵を優先順に返し、最後が常にファイル単位 (location) の鍵。init / _ は
+// 測った木が両側読めるとき (--base-root あり) 同じファイル + 指紋、パッケージ + 指紋の順に
+// 試し、当たらなければファイル単位の鍵へ落ちる。同じファイルを先にするのは、同じ中身の
+// init が 2 ファイルにあるとき、未変更の側が別ファイルの base を奪わないため。
 // ファイル単位を残すのは、既存の init を 1 行直しただけで新規扱いにしないため
 // (指紋は中身が変われば変わる)。宣言を読めなければファイル単位だけ。
 const keys = (r) => {
@@ -330,7 +332,8 @@ const keys = (r) => {
   const byLocation = `${location(r)}|${text}`;
   if (!baseRoot || !isRepeatableFunc(r)) return [byLocation];
   const fp = fingerprintOf(r);
-  return fp === null ? [byLocation] : [`${path.dirname(baseName(r.file))}|${text}|${fp}`, byLocation];
+  if (fp === null) return [byLocation];
+  return [`${baseName(r.file)}|${text}|${fp}`, `${path.dirname(baseName(r.file))}|${text}|${fp}`, byLocation];
 };
 const measured = (r) => {
   const pattern = VALUE_PATTERNS[r.rule];
@@ -379,12 +382,15 @@ current.results = current.results.filter(owned);
 // A baseline entry is registered under every key it has and consumed once. Keys
 // are tried pass by pass over ALL current findings, so a moved init claims its
 // fingerprint entry before an edited init elsewhere can take it by file key.
+// Across files (the package fingerprint), an entry whose file key a still
+// unmatched finding wants is taken last, so twin inits do not trade places.
 let survives;
 if (basePath && fs.existsSync(basePath)) {
   const baseline = new Map();
   for (const r of readResults(basePath, baseRoot).results.filter(owned)) {
-    const entry = { value: measured(r), used: false };
-    for (const key of keys(r)) {
+    const ks = keys(r);
+    const entry = { value: measured(r), used: false, fileKey: ks.at(-1) };
+    for (const key of ks) {
       if (!baseline.has(key)) baseline.set(key, []);
       baseline.get(key).push(entry);
     }
@@ -396,10 +402,14 @@ if (basePath && fs.existsSync(basePath)) {
   for (const entries of baseline.values()) entries.sort((a, b) => a.value - b.value);
   const matched = new Set();
   const pending = current.results.map((r) => ({ r, keys: keys(r), value: measured(r) }));
-  for (let pass = 0; pass < 2; pass++) {
+  for (let pass = 0; pass < 3; pass++) {
+    const wanted = new Set(pending.filter((p) => !matched.has(p.r.raw)).map((p) => p.keys.at(-1)));
     for (const p of pending) {
-      if (matched.has(p.r.raw) || pass >= p.keys.length) continue;
-      const entry = baseline.get(p.keys[pass])?.find((e) => !e.used && e.value >= p.value);
+      // Aligned from the end: a single-key finding only runs in the last (file key) pass.
+      const key = p.keys.at(pass - 3);
+      if (matched.has(p.r.raw) || key === undefined) continue;
+      const covering = (baseline.get(key) ?? []).filter((e) => !e.used && e.value >= p.value);
+      const entry = covering.find((e) => !wanted.has(e.fileKey)) ?? covering[0];
       if (!entry) continue;
       entry.used = true;
       matched.add(p.r.raw);

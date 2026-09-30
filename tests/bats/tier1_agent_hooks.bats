@@ -1395,6 +1395,40 @@ init_findings() {
   [[ "$output" == *"pkg/c.go:4: Function '_'"* ]]
 }
 
+@test "complexity-diff: an unchanged twin init does not take an edited twin's baseline" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-twin-edit"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # a.go and b.go hold the same init; only a.go's is edited. a.go comes first in the base.
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/base/pkg/a.go"
+  cp "$dir/base/pkg/a.go" "$dir/base/pkg/b.go"
+  cp "$dir/base/pkg/a.go" "$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(2)\n}\n' >"$dir/cur/pkg/a.go"
+  printf '{"runs":[{"results":[%s,%s]}]}' "$(init_findings pkg/a.go init)" "$(init_findings pkg/b.go init)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' "$(init_findings pkg/b.go init)" "$(init_findings pkg/a.go init)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: a moved twin init leaves the edited twin its baseline" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-twin-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # a.go's init moves to c.go unchanged; b.go's identical init is edited. b.go comes first in the base.
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/base/pkg/a.go"
+  cp "$dir/base/pkg/a.go" "$dir/base/pkg/b.go"
+  cp "$dir/base/pkg/a.go" "$dir/cur/pkg/c.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(2)\n}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s,%s]}]}' "$(init_findings pkg/b.go init)" "$(init_findings pkg/a.go init)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' "$(init_findings pkg/c.go init)" "$(init_findings pkg/b.go init)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "complexity-diff: without --base-root a moved init keeps its file key" {
   local dir="$BATS_TEST_TMPDIR/cx-init-noroot"
   mkdir -p "$dir/pkg"
