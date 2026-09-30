@@ -17,7 +17,6 @@
 // 生き残った finding を stdout へ 1 行 1 件で出し、絞り込み後の SARIF を --current へ
 // 書き戻す。呼び出し側は行数を数えて判定する。
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -31,7 +30,7 @@ const currentPath = opt("--current");
 const basePath = opt("--base");
 const mergeBase = opt("--merge-base");
 const root = opt("--root") ?? process.cwd();
-// ベースラインを測った木 (merge base の展開先)。funlen の receiver と init / _ の宣言を読むのに使う。
+// ベースラインを測った木 (merge base の展開先)。funlen の receiver を読むのに使う。
 const baseRoot = opt("--base-root");
 
 if (!currentPath) {
@@ -79,7 +78,7 @@ function relativeUri(uri) {
 // 成立しないので、こちらも finding として扱う。
 const UNUSED_DISABLE_RULE = "eslint-unused-disable";
 
-// tree は SARIF を測ったソースの木。宣言行を読み直すときの基点になる。
+// tree は SARIF を測ったソースの木。funlen の宣言行を読み直すときの基点になる。
 function readResults(file, tree) {
   const sarif = JSON.parse(fs.readFileSync(file, "utf8"));
   const out = [];
@@ -177,7 +176,7 @@ if (mergeBase) {
 }
 const baseName = (file) => renames.get(file) ?? file;
 
-// 鍵 (keys) は「指標の数字」だけを伏せる。同じ関数が値を動かしても鍵は変わらず、
+// identity は「指標の数字」だけを伏せる。同じ関数が値を動かしても鍵は変わらず、
 // 行番号のずれでも変わらない。
 //
 // 数字を全部潰さないのは、関数名や条件式の数字まで消えて Foo1 と Foo2 が同じ鍵に
@@ -219,8 +218,7 @@ const normalizeText = (rule, text) => {
 //
 // 例外が 2 つある。
 // - 関数の init と _ はパッケージ内に何個でも宣言できるので名前では区別できない。パッケージで
-//   鍵にすると、ある init の base 値が別ファイルの新しい init を吸収する。基本はファイル単位で、
-//   --base-root があれば宣言本文の指紋でもパッケージ内を突き合わせる (keys を参照)。
+//   鍵にすると、ある init の base 値が別ファイルの新しい init を吸収するので、ファイルで鍵にする。
 //   receiver 付きの init メソッドは一意なので例外にしない。
 // - funlen の本文は receiver を書かない ("Function 'Run' is too long")。測った木の
 //   宣言行から receiver を読んで鍵に足し、(*A).Run が (*B).Run を吸収しないようにする。
@@ -229,31 +227,21 @@ const normalizeText = (rule, text) => {
 //   両側ともファイル単位にそろえる。片側だけ receiver 付きの鍵にすると一致しない。
 const PACKAGE_KEYED_RULES = new Set(["gocognit", "gocyclo", "funlen"]);
 const REPEATABLE_FUNCS = new Set(["init", "_"]);
-const funcName = (r) => {
-  const m = /func `([^`]*)`|Function '([^']*)'/.exec(r.text);
-  return m ? (m[1] ?? m[2]) : undefined;
-};
-// gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
-// 本文は行頭から始まりうるので、改行を残して空白にする。文字列と rune は読み飛ばして残す
-// ("http://x" の // をコメントと取り違えないため)。literals を立てるとリテラルも同じく空白にする。
-const GO_LITERAL = /"(?:[^"\\\n]|\\.)*"|`[^`]*`|'(?:[^'\\\n]|\\.)*'/.source;
-const blankComments = (s, literals = false) =>
-  s.replace(new RegExp(String.raw`${GO_LITERAL}|\/\*[\s\S]*?\*\/|\/\/[^\n]*`, "g"), (c) =>
-    literals || c.startsWith("/") ? c.replace(/[^\n]/g, " ") : c,
-  );
-// stripSpace は文字列と rune の外の空白だけを抜く ("a b" と "ab" を同じ指紋にしないため)。
-const stripSpace = (s) =>
-  s.replace(new RegExp(String.raw`${GO_LITERAL}|\s+`, "g"), (c) => (/^\s/.test(c) ? "" : c));
-// sourceLines はファイルをコメント抜きの行 (text) と、リテラルも空白にした行 (shape) で返す。
-// コメントや raw string 中の行頭 "func" / "}" を宣言の始まり・終わりと取り違えないよう、
-// 宣言の範囲は shape で探す。行の数と位置は両方で同じ。
+// sourceLines はファイルをコメントと文字列・rune を空白にした行で返す (読めなければ null)。
+// gofmt は func と receiver の間のコメントも残すので、読む前に落とす。コメントや raw string
+// 中の行頭 "func" を宣言の始まりと取り違えないよう、ファイル全体で先に落とす。改行は残すので
+// 行の位置は変わらない。文字列を先に読み飛ばすのは "http://x" の // をコメントと取り違えないため。
 const sourceCache = new Map();
 const sourceLines = (file) => {
   if (!sourceCache.has(file)) {
     let lines = null;
     try {
-      const src = fs.readFileSync(file, "utf8");
-      lines = { text: blankComments(src).split("\n"), shape: blankComments(src, true).split("\n") };
+      lines = fs
+        .readFileSync(file, "utf8")
+        .replace(/"(?:[^"\\\n]|\\.)*"|`[^`]*`|'(?:[^'\\\n]|\\.)*'|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) =>
+          c.replace(/[^\n]/g, " "),
+        )
+        .split("\n");
     } catch {
       /* 読めなければ receiver 不明として扱う */
     }
@@ -271,81 +259,35 @@ const METHOD_DECL = new RegExp(
   String.raw`^func\s*\(\s*(?:${GO_IDENT}\s+)?[\s*(]*(${GO_IDENT})(?=\s*[),[])`,
   "u",
 );
-// declStart は end 行で終わる宣言の func 行の添字を返す (無ければ -1)。
-const declStart = (lines, end) => lines.slice(0, end).findLastIndex((l) => /^func\b/.test(l));
-// declText は end 行で終わる宣言を func 行から読んで返す。
-// receiver や名前の前のコメントで宣言が複数行にまたがっても、途中の行は字下げか ")" で
-// 始まる。別の宣言をまたいだら null。
-const declText = (lines, end) => {
-  const start = declStart(lines, end);
-  if (start < 0) return null;
-  const decl = lines.slice(start, end).join("\n");
-  return decl.split("\n").slice(1, -1).some((l) => /^[^\s)]/.test(l)) ? null : decl;
-};
 // receiverOf は報告行を含む宣言の receiver 型名を返す。関数なら ""、判定できなければ
 // null。receiver が複数行にまたがると funlen はメソッド名の行 (") Run() {") を報告する
-// ので、func 行まで遡ってから receiver を読む。
+// ので、func 行まで遡ってから receiver を読む。途中の行は字下げか ")" で始まり、
+// 別の宣言をまたいだら null。
 const receiverOf = (r) => {
   if (!r.tree || typeof r.line !== "number") return null;
-  const lines = sourceLines(path.resolve(r.tree, r.file))?.shape;
+  const lines = sourceLines(path.resolve(r.tree, r.file));
   if (!lines || r.line < 1 || r.line > lines.length) return null;
-  const decl = declText(lines, r.line);
-  if (decl === null) return null;
+  const start = lines.slice(0, r.line).findLastIndex((l) => /^func\b/.test(l));
+  if (start < 0) return null;
+  const decl = lines.slice(start, r.line);
+  if (decl.slice(1, -1).some((l) => /^[^\s)]/.test(l))) return null;
+  const text = decl.join("\n");
   // 関数と確かに読めたときだけ ""。どちらとも読めなければ null でファイル単位へ退避する。
-  if (FUNC_DECL.test(decl)) return "";
-  const m = METHOD_DECL.exec(decl);
-  return m ? m[1] : null;
+  if (FUNC_DECL.test(text)) return "";
+  return METHOD_DECL.exec(text)?.[1] ?? null;
 };
 const location = (r) => {
   const file = baseName(r.file);
   if (!file.endsWith(".go") || !PACKAGE_KEYED_RULES.has(r.rule)) return file;
+  const m = /func `([^`]*)`|Function '([^']*)'/.exec(r.text);
+  const name = m?.[1] ?? m?.[2];
   // gocognit/gocyclo はメソッドを "(*A).init" と書くので、ここで当たるのは関数だけ。
-  if (r.rule !== "funlen") return REPEATABLE_FUNCS.has(funcName(r)) ? file : path.dirname(file);
-  // funlen はメソッドでも "Function 'init'" と書くので、receiver が無いときだけ例外にする。
+  if (r.rule !== "funlen") return REPEATABLE_FUNCS.has(name) ? file : path.dirname(file);
   const recv = baseRoot ? receiverOf(r) : null;
-  if (recv === null || (recv === "" && REPEATABLE_FUNCS.has(funcName(r)))) return file;
+  if (recv === null || (recv === "" && REPEATABLE_FUNCS.has(name))) return file;
   return `${path.dirname(file)}|${recv}`;
 };
-// fingerprintOf は報告行を含む func 宣言をコメントとリテラル外の空白を抜いて読み、そのハッシュを返す。
-// 空白を詰めるだけだと、f(/* c */ 1) のコメント跡が f( 1) と残って f(1) と別物になる。
-// func と名前の間に複数行コメントがあると報告行は名前の行なので、func 行まで遡る。
-// gofmt 済みのトップレベル関数は行頭の "}" で閉じる (1 行の関数は報告行で閉じる)。
-// 範囲はリテラルを空白にした shape で探し、指紋はリテラルを残した text から読む。
-// 宣言を読めない・閉じが見つからないときは null。
-const fingerprintOf = (r) => {
-  if (!r.tree || typeof r.line !== "number") return null;
-  const src = sourceLines(path.resolve(r.tree, r.file));
-  const lines = src?.shape;
-  if (!lines || r.line < 1 || r.line > lines.length) return null;
-  const head = declText(lines, r.line);
-  if (head === null) return null;
-  const start = declStart(lines, r.line);
-  const at = r.line - 1;
-  const end = /\}\s*$/.test(head) ? at : lines.findIndex((l, i) => i > at && /^\}/.test(l));
-  if (end < 0) return null;
-  const decl = stripSpace(src.text.slice(start, end + 1).join("\n"));
-  return createHash("sha256").update(decl).digest("hex");
-};
-// receiver の無い init / _ か。funlen はメソッドでも同じ本文なので宣言を読む。
-const isRepeatableFunc = (r) =>
-  r.file.endsWith(".go") &&
-  PACKAGE_KEYED_RULES.has(r.rule) &&
-  REPEATABLE_FUNCS.has(funcName(r)) &&
-  (r.rule !== "funlen" || receiverOf(r) === "");
-// keys は突き合わせる鍵を優先順に返し、最後が常にファイル単位 (location) の鍵。init / _ は
-// 測った木が両側読めるとき (--base-root あり) 同じファイル + 指紋、パッケージ + 指紋の順に
-// 試し、当たらなければファイル単位の鍵へ落ちる。同じファイルを先にするのは、同じ中身の
-// init が 2 ファイルにあるとき、未変更の側が別ファイルの base を奪わないため。
-// ファイル単位を残すのは、既存の init を 1 行直しただけで新規扱いにしないため
-// (指紋は中身が変われば変わる)。宣言を読めなければファイル単位だけ。
-const keys = (r) => {
-  const text = `${r.rule}|${normalizeText(r.rule, r.text)}`;
-  const byLocation = `${location(r)}|${text}`;
-  if (!baseRoot || !isRepeatableFunc(r)) return [byLocation];
-  const fp = fingerprintOf(r);
-  if (fp === null) return [byLocation];
-  return [`${baseName(r.file)}|${text}|${fp}`, `${path.dirname(baseName(r.file))}|${text}|${fp}`, byLocation];
-};
+const identity = (r) => `${location(r)}|${r.rule}|${normalizeText(r.rule, r.text)}`;
 const measured = (r) => {
   const pattern = VALUE_PATTERNS[r.rule];
   if (!pattern) return 0;
@@ -385,65 +327,32 @@ const owned = (r) => OWNED_RULES.has(r.rule);
 const current = readResults(currentPath, root);
 current.results = current.results.filter(owned);
 
-// A finding survives when the maximum matching between current findings and
-// baseline entries leaves it unmatched. An edge joins a finding to an entry that
-// shares one of its keys at an equal or higher value; each entry covers one
-// finding. Counting instead of set membership keeps duplicate anonymous functions
-// ("Arrow function has too many statements") honest: two in the base absorb two
-// now, a third one survives.
-//
-// Greedy consumption depends on SARIF order: a moved init can take the entry an
-// in-place edit needed, even though another assignment covers both. Kuhn's
-// augmenting paths find a maximum matching, and the findings are visited in a
-// fixed order so the unmatched ones do not depend on the SARIF order either.
-// Rounds widen the keys: the same-file fingerprint, then the package
-// fingerprint, then the plain file key (keys). A fingerprint wins before any
-// plain file key, so a new init cannot take the entry of an unchanged init moved
-// out of its file. Augmenting never unmatches a finding, so the preference only
-// breaks ties and cannot shrink the matching.
+// A finding survives when the baseline has no unconsumed entry that already
+// covered it at an equal or higher value. Consuming greedily keeps duplicate
+// anonymous functions ("Arrow function has too many statements") honest: two in
+// the base absorb two now, a third one survives.
 let survives;
 if (basePath && fs.existsSync(basePath)) {
   const baseline = new Map();
   for (const r of readResults(basePath, baseRoot).results.filter(owned)) {
-    const entry = { value: measured(r) };
-    for (const key of keys(r)) {
-      if (!baseline.has(key)) baseline.set(key, []);
-      baseline.get(key).push(entry);
-    }
+    const key = identity(r);
+    if (!baseline.has(key)) baseline.set(key, []);
+    baseline.get(key).push(measured(r));
   }
-  // Ascending, so a finding tries the SMALLEST covering entry first. dupl findings,
-  // whose leading number is a line offset rather than a severity, need the
-  // larger entries left for later values.
-  for (const entries of baseline.values()) entries.sort((a, b) => a.value - b.value);
-  const order = (r) => `${r.file}\0${String(r.line ?? 0).padStart(9, "0")}\0${r.rule}\0${r.text}`;
-  const pending = current.results
-    .map((r) => {
-      const ks = keys(r);
-      // Every key but the last (the plain file key) is a fingerprint.
-      const fps = ks.slice(0, -1);
-      return { r, rounds: [fps.slice(0, 1), fps, ks], value: measured(r), at: order(r) };
-    })
-    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-  const owner = new Map();
-  const matched = new Set();
-  const augment = (p, round, seen) => {
-    for (const key of p.rounds[round]) {
-      for (const e of baseline.get(key) ?? []) {
-        if (e.value < p.value || seen.has(e)) continue;
-        seen.add(e);
-        const q = owner.get(e);
-        if (q && !augment(q, round, seen)) continue;
-        owner.set(e, p);
-        matched.add(p.r.raw);
-        return true;
-      }
-    }
+  // Ascending, so the match below consumes the SMALLEST baseline entry that
+  // still covers the current value. Consuming the largest first would leave a
+  // too-small entry for a later value and report it as new — dupl findings,
+  // whose leading number is a line offset rather than a severity, hit this.
+  for (const values of baseline.values()) values.sort((a, b) => a - b);
+  survives = (r) => {
+    const values = baseline.get(identity(r));
+    if (!values || values.length === 0) return true;
+    const value = measured(r);
+    const i = values.findIndex((v) => v >= value);
+    if (i < 0) return true;
+    values.splice(i, 1);
     return false;
   };
-  for (const round of [0, 1, 2]) {
-    for (const p of pending) if (!matched.has(p.r.raw)) augment(p, round, new Set());
-  }
-  survives = (r) => !matched.has(r.raw);
 } else if (mergeBase) {
   survives = (r) => {
     // Keep anything we cannot place: a dropped finding is a silent miss.
