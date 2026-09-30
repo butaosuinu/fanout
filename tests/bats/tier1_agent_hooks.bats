@@ -1293,7 +1293,7 @@ go_finding() {
   mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
   # (*A).init moves a.go -> b.go unchanged; x.go's plain init shrinks while c.go gains one.
   printf 'package pkg\n\nfunc (a *A) init() {}\n' >"$dir/base/pkg/a.go"
-  printf 'package pkg\n\nfunc init() {}\n' >"$dir/base/pkg/x.go"
+  printf 'package pkg\n\nfunc init() { old() }\n' >"$dir/base/pkg/x.go"
   printf 'package pkg\n\nfunc (a *A) init() {}\n' >"$dir/cur/pkg/b.go"
   printf 'package pkg\n\nfunc init() {}\n' >"$dir/cur/pkg/c.go"
   printf '{"runs":[{"results":[%s,%s]}]}' \
@@ -1323,6 +1323,89 @@ go_finding() {
   run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
   [ "$status" -eq 0 ]
   [[ "$output" == *"pkg/b.go:3:"* ]]
+}
+
+# init_findings FILE NAME [LINE] — the gocognit and funlen findings of one plain init / _.
+init_findings() {
+  printf '%s,%s' \
+    "$(go_finding "$1" gocognit "cognitive complexity 25 of func \`$2\` is high (> 20)" "${3:-4}")" \
+    "$(go_finding "$1" funlen "Function '$2' is too long (70 > 60)" "${3:-4}")"
+}
+
+@test "complexity-diff: an unchanged init moved to another file is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # Only comments and blank space differ; the declaration itself is unchanged.
+  printf 'package pkg\n\n// setup\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\n\nfunc init() {\n\tsetup(1) // moved\n}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/a.go init)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/b.go init)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: a shrunk init does not absorb a new init in another file" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-absorb"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # a.go's init shrinks under budget while b.go gains a different over-budget init.
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n}\n' >"$dir/cur/pkg/a.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(2)\n}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/a.go init)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/b.go init)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:4: cognitive complexity"* ]] || false
+  [[ "$output" == *"pkg/b.go:4: Function 'init'"* ]]
+}
+
+@test "complexity-diff: an edited init that stays in its file is still pre-existing" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-edit"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(2)\n}\n' >"$dir/cur/pkg/a.go"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/a.go init)" >"$dir/base.sarif"
+  cp "$dir/base.sarif" "$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: a moved func _ is not new, a different one is" {
+  local dir="$BATS_TEST_TMPDIR/cx-blank-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  printf 'package pkg\n\nfunc x() {}\nfunc _() {\n\tone()\n}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc _() {\n\tone()\n}\n' >"$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc x() {}\nfunc _() {\n\ttwo()\n}\n' >"$dir/cur/pkg/c.go"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/a.go _)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' "$(init_findings pkg/b.go _)" "$(init_findings pkg/c.go _)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"pkg/b.go"* ]] || false
+  [[ "$output" == *"pkg/c.go:4: cognitive complexity"* ]] || false
+  [[ "$output" == *"pkg/c.go:4: Function '_'"* ]]
+}
+
+@test "complexity-diff: without --base-root a moved init keeps its file key" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-noroot"
+  mkdir -p "$dir/pkg"
+  printf 'package pkg\n\nfunc x() {}\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/a.go init)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/b.go init)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:4: cognitive complexity"* ]] || false
+  [[ "$output" == *"pkg/b.go:4: Function 'init'"* ]]
 }
 
 @test "complexity-on-edit: degrades to advice after the retry cap" {

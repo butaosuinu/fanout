@@ -17,6 +17,7 @@
 // 生き残った finding を stdout へ 1 行 1 件で出し、絞り込み後の SARIF を --current へ
 // 書き戻す。呼び出し側は行数を数えて判定する。
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -30,7 +31,7 @@ const currentPath = opt("--current");
 const basePath = opt("--base");
 const mergeBase = opt("--merge-base");
 const root = opt("--root") ?? process.cwd();
-// ベースラインを測った木 (merge base の展開先)。funlen の receiver を読むのに使う。
+// ベースラインを測った木 (merge base の展開先)。funlen の receiver と init / _ の宣言を読むのに使う。
 const baseRoot = opt("--base-root");
 
 if (!currentPath) {
@@ -176,7 +177,7 @@ if (mergeBase) {
 }
 const baseName = (file) => renames.get(file) ?? file;
 
-// identity は「指標の数字」だけを伏せる。同じ関数が値を動かしても鍵は変わらず、
+// 鍵 (keys) は「指標の数字」だけを伏せる。同じ関数が値を動かしても鍵は変わらず、
 // 行番号のずれでも変わらない。
 //
 // 数字を全部潰さないのは、関数名や条件式の数字まで消えて Foo1 と Foo2 が同じ鍵に
@@ -217,8 +218,9 @@ const normalizeText = (rule, text) => {
 // パッケージ内で既存の関数を別ファイルへ移しただけで新規違反に化ける。
 //
 // 例外が 2 つある。
-// - 関数の init と _ はパッケージ内に何個でも宣言できるのでファイル単位のまま。パッケージで
-//   鍵にすると、ある init の base 値が別ファイルの新しい init を吸収する。
+// - 関数の init と _ はパッケージ内に何個でも宣言できるので名前では区別できない。パッケージで
+//   鍵にすると、ある init の base 値が別ファイルの新しい init を吸収する。基本はファイル単位で、
+//   --base-root があれば宣言本文の指紋でもパッケージ内を突き合わせる (keys を参照)。
 //   receiver 付きの init メソッドは一意なので例外にしない。
 // - funlen の本文は receiver を書かない ("Function 'Run' is too long")。測った木の
 //   宣言行から receiver を読んで鍵に足し、(*A).Run が (*B).Run を吸収しないようにする。
@@ -295,7 +297,41 @@ const location = (r) => {
   if (recv === null || (recv === "" && REPEATABLE_FUNCS.has(funcName(r)))) return file;
   return `${path.dirname(file)}|${recv}`;
 };
-const identity = (r) => `${location(r)}|${r.rule}|${normalizeText(r.rule, r.text)}`;
+// fingerprintOf は報告行の func 宣言をコメント抜き・空白詰めで読み、そのハッシュを返す。
+// gofmt 済みのトップレベル関数は行頭の "}" で閉じる (1 行の関数は func 行で閉じる)。
+// 報告行が func 行でない・閉じが見つからないときは null。
+// ponytail: 行頭に "}" を書いた raw string があるとそこで切れる。切れた先の編集は指紋に
+// 出ないが、値の比較は残る。字句解析が要るほどの差ではない。
+const fingerprintOf = (r) => {
+  if (!r.tree || typeof r.line !== "number") return null;
+  const lines = sourceLines(path.resolve(r.tree, r.file));
+  if (!lines || r.line < 1 || r.line > lines.length) return null;
+  const start = r.line - 1;
+  if (!/^func\b/.test(lines[start])) return null;
+  const end = /\}\s*$/.test(blankComments(lines[start]))
+    ? start
+    : lines.findIndex((l, i) => i > start && /^\}/.test(l));
+  if (end < 0) return null;
+  const decl = blankComments(lines.slice(start, end + 1).join("\n")).replace(/\s+/g, " ").trim();
+  return createHash("sha256").update(decl).digest("hex");
+};
+// receiver の無い init / _ か。funlen はメソッドでも同じ本文なので宣言を読む。
+const isRepeatableFunc = (r) =>
+  r.file.endsWith(".go") &&
+  PACKAGE_KEYED_RULES.has(r.rule) &&
+  REPEATABLE_FUNCS.has(funcName(r)) &&
+  (r.rule !== "funlen" || receiverOf(r) === "");
+// keys は突き合わせる鍵を優先順に返す。init / _ は測った木が両側読めるとき (--base-root あり)
+// パッケージ + 宣言の指紋の鍵を先に試し、当たらなければファイル単位の鍵へ落ちる。
+// ファイル単位を残すのは、既存の init を 1 行直しただけで新規扱いにしないため
+// (指紋は中身が変われば変わる)。宣言を読めなければファイル単位だけ。
+const keys = (r) => {
+  const text = `${r.rule}|${normalizeText(r.rule, r.text)}`;
+  const byLocation = `${location(r)}|${text}`;
+  if (!baseRoot || !isRepeatableFunc(r)) return [byLocation];
+  const fp = fingerprintOf(r);
+  return fp === null ? [byLocation] : [`${path.dirname(baseName(r.file))}|${text}|${fp}`, byLocation];
+};
 const measured = (r) => {
   const pattern = VALUE_PATTERNS[r.rule];
   if (!pattern) return 0;
@@ -339,28 +375,37 @@ current.results = current.results.filter(owned);
 // covered it at an equal or higher value. Consuming greedily keeps duplicate
 // anonymous functions ("Arrow function has too many statements") honest: two in
 // the base absorb two now, a third one survives.
+//
+// A baseline entry is registered under every key it has and consumed once. Keys
+// are tried pass by pass over ALL current findings, so a moved init claims its
+// fingerprint entry before an edited init elsewhere can take it by file key.
 let survives;
 if (basePath && fs.existsSync(basePath)) {
   const baseline = new Map();
   for (const r of readResults(basePath, baseRoot).results.filter(owned)) {
-    const key = identity(r);
-    if (!baseline.has(key)) baseline.set(key, []);
-    baseline.get(key).push(measured(r));
+    const entry = { value: measured(r), used: false };
+    for (const key of keys(r)) {
+      if (!baseline.has(key)) baseline.set(key, []);
+      baseline.get(key).push(entry);
+    }
   }
   // Ascending, so the match below consumes the SMALLEST baseline entry that
   // still covers the current value. Consuming the largest first would leave a
   // too-small entry for a later value and report it as new — dupl findings,
   // whose leading number is a line offset rather than a severity, hit this.
-  for (const values of baseline.values()) values.sort((a, b) => a - b);
-  survives = (r) => {
-    const values = baseline.get(identity(r));
-    if (!values || values.length === 0) return true;
-    const value = measured(r);
-    const i = values.findIndex((v) => v >= value);
-    if (i < 0) return true;
-    values.splice(i, 1);
-    return false;
-  };
+  for (const entries of baseline.values()) entries.sort((a, b) => a.value - b.value);
+  const matched = new Set();
+  const pending = current.results.map((r) => ({ r, keys: keys(r), value: measured(r) }));
+  for (let pass = 0; pass < 2; pass++) {
+    for (const p of pending) {
+      if (matched.has(p.r.raw) || pass >= p.keys.length) continue;
+      const entry = baseline.get(p.keys[pass])?.find((e) => !e.used && e.value >= p.value);
+      if (!entry) continue;
+      entry.used = true;
+      matched.add(p.r.raw);
+    }
+  }
+  survives = (r) => !matched.has(r.raw);
 } else if (mergeBase) {
   survives = (r) => {
     // Keep anything we cannot place: a dropped finding is a silent miss.
