@@ -1471,6 +1471,23 @@ init_findings() {
   [ -z "$output" ]
 }
 
+@test "complexity-diff: comments hiding a brace or following a URL do not break a moved init" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-string-comment"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # The base comment holds a line-start "}" and a "//" sits inside a string; the move drops the comments.
+  printf 'package pkg\n\nfunc /* a\n} */ init() {\n\tget("http://x") /* note\n\tmore */\n}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc init() {\n\tget("http://x")\n}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/a.go gocognit 'cognitive complexity 25 of func `init` is high (> 20)' 3)" \
+    "$(go_finding pkg/a.go funlen "Function 'init' is too long (70 > 60)" 4)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/b.go init 3)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 # init_sarif OUT FILE... — a SARIF holding init_findings for each pkg/FILE, in the given order.
 init_sarif() {
   local out="$1" results="" f

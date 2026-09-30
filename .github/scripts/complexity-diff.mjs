@@ -233,12 +233,21 @@ const funcName = (r) => {
   const m = /func `([^`]*)`|Function '([^']*)'/.exec(r.text);
   return m ? (m[1] ?? m[2]) : undefined;
 };
+// gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
+// 本文は行頭から始まりうるので、改行を残して空白にする。文字列と rune は読み飛ばして残す
+// ("http://x" の // をコメントと取り違えないため)。
+const blankComments = (s) =>
+  s.replace(/"(?:[^"\\\n]|\\.)*"|`[^`]*`|'(?:[^'\\\n]|\\.)*'|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) =>
+    c.startsWith("/") ? c.replace(/[^\n]/g, " ") : c,
+  );
+// sourceLines はファイルをコメント抜きの行で返す。コメント中の行頭 "func" / "}" を宣言の
+// 始まり・終わりと取り違えないよう、ファイル全体で先に落とす。
 const sourceCache = new Map();
 const sourceLines = (file) => {
   if (!sourceCache.has(file)) {
     let lines = null;
     try {
-      lines = fs.readFileSync(file, "utf8").split("\n");
+      lines = blankComments(fs.readFileSync(file, "utf8")).split("\n");
     } catch {
       /* 読めなければ receiver 不明として扱う */
     }
@@ -256,26 +265,15 @@ const METHOD_DECL = new RegExp(
   String.raw`^func\s*\(\s*(?:${GO_IDENT}\s+)?[\s*(]*(${GO_IDENT})(?=\s*[),[])`,
   "u",
 );
-// gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
-// 本文は行頭から始まりうるので、改行を残して空白にする。
-const blankComments = (s) =>
-  s.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
 // declStart は end 行で終わる宣言の func 行の添字を返す (無ければ -1)。
-// コメント中の行頭 "func" を拾うと閉じ "*/" だけが残るので、さらに前の func 行を探す。
-const declStart = (lines, end) => {
-  for (let stop = end; ; ) {
-    const start = lines.slice(0, stop).findLastIndex((l) => /^func\b/.test(l));
-    if (start < 0 || !blankComments(lines.slice(start, end).join("\n")).includes("*/")) return start;
-    stop = start;
-  }
-};
-// declText は end 行で終わる宣言を func 行から読み、コメントを空白にして返す。
+const declStart = (lines, end) => lines.slice(0, end).findLastIndex((l) => /^func\b/.test(l));
+// declText は end 行で終わる宣言を func 行から読んで返す。
 // receiver や名前の前のコメントで宣言が複数行にまたがっても、途中の行は字下げか ")" で
 // 始まる。別の宣言をまたいだら null。
 const declText = (lines, end) => {
   const start = declStart(lines, end);
   if (start < 0) return null;
-  const decl = blankComments(lines.slice(start, end).join("\n"));
+  const decl = lines.slice(start, end).join("\n");
   return decl.split("\n").slice(1, -1).some((l) => /^[^\s)]/.test(l)) ? null : decl;
 };
 // receiverOf は報告行を含む宣言の receiver 型名を返す。関数なら ""、判定できなければ
@@ -307,7 +305,7 @@ const location = (r) => {
 // func と名前の間に複数行コメントがあると報告行は名前の行なので、func 行まで遡る。
 // gofmt 済みのトップレベル関数は行頭の "}" で閉じる (1 行の関数は報告行で閉じる)。
 // 宣言を読めない・閉じが見つからないときは null。
-// ponytail: 行頭に "}" を書いた raw string があるとそこで切れる。切れた先の編集は指紋に
+// ponytail: 行頭に "func" / "}" を書いた raw string があるとそこで切れる。切れた先の編集は指紋に
 // 出ないが、値の比較は残る。字句解析が要るほどの差ではない。
 const fingerprintOf = (r) => {
   if (!r.tree || typeof r.line !== "number") return null;
@@ -319,7 +317,7 @@ const fingerprintOf = (r) => {
   const at = r.line - 1;
   const end = /\}\s*$/.test(head) ? at : lines.findIndex((l, i) => i > at && /^\}/.test(l));
   if (end < 0) return null;
-  const decl = blankComments(lines.slice(start, end + 1).join("\n")).replace(/\s+/g, "");
+  const decl = lines.slice(start, end + 1).join("\n").replace(/\s+/g, "");
   return createHash("sha256").update(decl).digest("hex");
 };
 // receiver の無い init / _ か。funlen はメソッドでも同じ本文なので宣言を読む。
