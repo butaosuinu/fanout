@@ -260,16 +260,23 @@ const METHOD_DECL = new RegExp(
 // 本文は行頭から始まりうるので、改行を残して空白にする。
 const blankComments = (s) =>
   s.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (c) => c.replace(/[^\n]/g, " "));
-// declText は end 行で終わる宣言を func 行から読み、コメントを空白にして返す。
+// declStart は end 行で終わる宣言の func 行の添字を返す (無ければ -1)。
 // コメント中の行頭 "func" を拾うと閉じ "*/" だけが残るので、さらに前の func 行を探す。
-const declText = (lines, end) => {
+const declStart = (lines, end) => {
   for (let stop = end; ; ) {
     const start = lines.slice(0, stop).findLastIndex((l) => /^func\b/.test(l));
-    if (start < 0) return null;
-    const decl = blankComments(lines.slice(start, end).join("\n"));
-    if (!decl.includes("*/")) return decl;
+    if (start < 0 || !blankComments(lines.slice(start, end).join("\n")).includes("*/")) return start;
     stop = start;
   }
+};
+// declText は end 行で終わる宣言を func 行から読み、コメントを空白にして返す。
+// receiver や名前の前のコメントで宣言が複数行にまたがっても、途中の行は字下げか ")" で
+// 始まる。別の宣言をまたいだら null。
+const declText = (lines, end) => {
+  const start = declStart(lines, end);
+  if (start < 0) return null;
+  const decl = blankComments(lines.slice(start, end).join("\n"));
+  return decl.split("\n").slice(1, -1).some((l) => /^[^\s)]/.test(l)) ? null : decl;
 };
 // receiverOf は報告行を含む宣言の receiver 型名を返す。関数なら ""、判定できなければ
 // null。receiver が複数行にまたがると funlen はメソッド名の行 (") Run() {") を報告する
@@ -280,8 +287,6 @@ const receiverOf = (r) => {
   if (!lines || r.line < 1 || r.line > lines.length) return null;
   const decl = declText(lines, r.line);
   if (decl === null) return null;
-  // receiver の途中の行は字下げか ")" で始まる。別の宣言をまたいだら諦める。
-  if (decl.split("\n").slice(1, -1).some((l) => /^[^\s)]/.test(l))) return null;
   // 関数と確かに読めたときだけ ""。どちらとも読めなければ null でファイル単位へ退避する。
   if (FUNC_DECL.test(decl)) return "";
   const m = METHOD_DECL.exec(decl);
@@ -297,20 +302,21 @@ const location = (r) => {
   if (recv === null || (recv === "" && REPEATABLE_FUNCS.has(funcName(r)))) return file;
   return `${path.dirname(file)}|${recv}`;
 };
-// fingerprintOf は報告行の func 宣言をコメント抜き・空白詰めで読み、そのハッシュを返す。
-// gofmt 済みのトップレベル関数は行頭の "}" で閉じる (1 行の関数は func 行で閉じる)。
-// 報告行が func 行でない・閉じが見つからないときは null。
+// fingerprintOf は報告行を含む func 宣言をコメント抜き・空白詰めで読み、そのハッシュを返す。
+// func と名前の間に複数行コメントがあると報告行は名前の行なので、func 行まで遡る。
+// gofmt 済みのトップレベル関数は行頭の "}" で閉じる (1 行の関数は報告行で閉じる)。
+// 宣言を読めない・閉じが見つからないときは null。
 // ponytail: 行頭に "}" を書いた raw string があるとそこで切れる。切れた先の編集は指紋に
 // 出ないが、値の比較は残る。字句解析が要るほどの差ではない。
 const fingerprintOf = (r) => {
   if (!r.tree || typeof r.line !== "number") return null;
   const lines = sourceLines(path.resolve(r.tree, r.file));
   if (!lines || r.line < 1 || r.line > lines.length) return null;
-  const start = r.line - 1;
-  if (!/^func\b/.test(lines[start])) return null;
-  const end = /\}\s*$/.test(blankComments(lines[start]))
-    ? start
-    : lines.findIndex((l, i) => i > start && /^\}/.test(l));
+  const head = declText(lines, r.line);
+  if (head === null) return null;
+  const start = declStart(lines, r.line);
+  const at = r.line - 1;
+  const end = /\}\s*$/.test(head) ? at : lines.findIndex((l, i) => i > at && /^\}/.test(l));
   if (end < 0) return null;
   const decl = blankComments(lines.slice(start, end + 1).join("\n")).replace(/\s+/g, " ").trim();
   return createHash("sha256").update(decl).digest("hex");
@@ -383,7 +389,7 @@ current.results = current.results.filter(owned);
 // are tried pass by pass over ALL current findings, so a moved init claims its
 // fingerprint entry before an edited init elsewhere can take it by file key.
 // Across files (the package fingerprint), an entry whose file key a still
-// unmatched finding wants is taken last, so twin inits do not trade places.
+// unmatched finding wants (demand) is taken last, so twin inits do not trade places.
 let survives;
 if (basePath && fs.existsSync(basePath)) {
   const baseline = new Map();
@@ -402,17 +408,19 @@ if (basePath && fs.existsSync(basePath)) {
   for (const entries of baseline.values()) entries.sort((a, b) => a.value - b.value);
   const matched = new Set();
   const pending = current.results.map((r) => ({ r, keys: keys(r), value: measured(r) }));
+  const demand = new Map();
+  for (const p of pending) demand.set(p.keys.at(-1), (demand.get(p.keys.at(-1)) ?? 0) + 1);
   for (let pass = 0; pass < 3; pass++) {
-    const wanted = new Set(pending.filter((p) => !matched.has(p.r.raw)).map((p) => p.keys.at(-1)));
     for (const p of pending) {
       // Aligned from the end: a single-key finding only runs in the last (file key) pass.
       const key = p.keys.at(pass - 3);
       if (matched.has(p.r.raw) || key === undefined) continue;
       const covering = (baseline.get(key) ?? []).filter((e) => !e.used && e.value >= p.value);
-      const entry = covering.find((e) => !wanted.has(e.fileKey)) ?? covering[0];
+      const entry = covering.find((e) => !demand.get(e.fileKey)) ?? covering[0];
       if (!entry) continue;
       entry.used = true;
       matched.add(p.r.raw);
+      demand.set(p.keys.at(-1), demand.get(p.keys.at(-1)) - 1);
     }
   }
   survives = (r) => !matched.has(r.raw);
