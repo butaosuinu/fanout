@@ -504,21 +504,27 @@ func TestRealizeManagedWorktreeUsesSavedRouteDeadline(t *testing.T) {
 	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
 		t.Fatalf("initial realization error = %v", err)
 	}
+	// The route context is context.WithDeadline on the wall clock, while
+	// hooks.Now is frozen at fixture creation, so the saved deadline must be
+	// measured from time.Now. It sits below the classification cap so that it
+	// is the tighter bound the route inherits.
+	var savedDeadline time.Time
 	mutateManagedTestIntent(t, repo, realized.Intent.ID, func(intent *state.LaunchIntent) {
-		intent.ExpiresUnixMS = hooks.Now().Add(2 * time.Second).UnixMilli()
+		budget := maxManagedRecoveryClassificationTimeout - time.Second
+		intent.ExpiresUnixMS = time.Now().Add(budget).UnixMilli()
+		savedDeadline = time.UnixMilli(intent.ExpiresUnixMS)
 	})
 
 	_, err = realizeManagedWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
 		t.Fatalf("saved-deadline retry error = %v", err)
 	}
-	remaining := time.Until(runtime.routeDeadline)
-	if !runtime.routeHasDeadline || remaining <= 0 || remaining > 2*time.Second {
+	if !runtime.routeHasDeadline || !runtime.routeDeadline.Equal(savedDeadline) {
 		t.Fatalf(
-			"saved route deadline = %v, %t (remaining %v)",
+			"saved route deadline = %v, %t, want %v",
 			runtime.routeDeadline,
 			runtime.routeHasDeadline,
-			remaining,
+			savedDeadline,
 		)
 	}
 }
