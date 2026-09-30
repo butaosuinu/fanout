@@ -1337,7 +1337,7 @@ init_findings() {
   mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
   # Only comments and blank space differ; the declaration itself is unchanged.
   printf 'package pkg\n\n// setup\nfunc init() {\n\tsetup(1)\n}\n' >"$dir/base/pkg/a.go"
-  printf 'package pkg\n\n\nfunc init() {\n\tsetup(1) // moved\n}\n' >"$dir/cur/pkg/b.go"
+  printf 'package pkg\n\n\nfunc init() {\n\tsetup(/* one */ 1) // moved\n}\n' >"$dir/cur/pkg/b.go"
   printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/a.go init)" >"$dir/base.sarif"
   printf '{"runs":[{"results":[%s]}]}' "$(init_findings pkg/b.go init)" >"$dir/cur.sarif"
 

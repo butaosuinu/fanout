@@ -302,7 +302,8 @@ const location = (r) => {
   if (recv === null || (recv === "" && REPEATABLE_FUNCS.has(funcName(r)))) return file;
   return `${path.dirname(file)}|${recv}`;
 };
-// fingerprintOf は報告行を含む func 宣言をコメント抜き・空白詰めで読み、そのハッシュを返す。
+// fingerprintOf は報告行を含む func 宣言をコメントと空白を全て抜いて読み、そのハッシュを返す。
+// 空白を詰めるだけだと、f(/* c */ 1) のコメント跡が f( 1) と残って f(1) と別物になる。
 // func と名前の間に複数行コメントがあると報告行は名前の行なので、func 行まで遡る。
 // gofmt 済みのトップレベル関数は行頭の "}" で閉じる (1 行の関数は報告行で閉じる)。
 // 宣言を読めない・閉じが見つからないときは null。
@@ -318,7 +319,7 @@ const fingerprintOf = (r) => {
   const at = r.line - 1;
   const end = /\}\s*$/.test(head) ? at : lines.findIndex((l, i) => i > at && /^\}/.test(l));
   if (end < 0) return null;
-  const decl = blankComments(lines.slice(start, end + 1).join("\n")).replace(/\s+/g, " ").trim();
+  const decl = blankComments(lines.slice(start, end + 1).join("\n")).replace(/\s+/g, "");
   return createHash("sha256").update(decl).digest("hex");
 };
 // receiver の無い init / _ か。funlen はメソッドでも同じ本文なので宣言を読む。
