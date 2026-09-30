@@ -1221,6 +1221,39 @@ go_finding() {
   [ -z "$output" ]
 }
 
+@test "complexity-diff: a moved method with a parenthesized receiver type is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-paren-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  printf 'package pkg\n\nfunc (a *(A)) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (a *(A)) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: funlen tells parenthesized receiver types apart" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-paren-distinct"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A).Run shrinks under budget while a new long (*B).Run appears in another file.
+  printf 'package pkg\n\nfunc (a *(A)) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (b *(B)) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (65 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]]
+}
+
 @test "complexity-diff: funlen tells Unicode receivers apart" {
   local dir="$BATS_TEST_TMPDIR/cx-recv-unicode"
   mkdir -p "$dir/base/pkg" "$dir/cur/pkg"

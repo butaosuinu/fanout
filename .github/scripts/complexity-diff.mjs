@@ -247,10 +247,11 @@ const sourceLines = (file) => {
 // Go の識別子は Unicode の文字・数字を含む。\w だと (*A日) と (*A月) がどちらも A になる。
 const GO_IDENT = String.raw`[\p{L}_][\p{L}\p{Nd}_]*`;
 const FUNC_DECL = new RegExp(String.raw`^func\s+${GO_IDENT}\s*[[(]`, "u");
+// 型名は "*" と "(" を読み飛ばした先の識別子 ((a *(A)) / ((A)) / (a (*A)) も gofmt が残す)。
 // 型名の直後が receiver の終わり (")" / 複数行の "," / 型引数の "[") でなければ読まない。
 // (a *(A)) で変数名 a を型名と取り違えないため。
 const METHOD_DECL = new RegExp(
-  String.raw`^func\s*\(\s*(?:${GO_IDENT}\s+)?\*?\s*(${GO_IDENT})(?=\s*[),[])`,
+  String.raw`^func\s*\(\s*(?:${GO_IDENT}\s+)?[\s*(]*(${GO_IDENT})(?=\s*[),[])`,
   "u",
 );
 // gofmt は func と receiver の間のコメントも残すので、読む前に落とす。複数行コメントの
