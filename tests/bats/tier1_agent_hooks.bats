@@ -1063,9 +1063,9 @@ PROBE
   [[ "$output" == *"UnderBudget"* ]]
 }
 
-# go_finding FILE RULE TEXT — one SARIF result as golangci-lint emits it.
+# go_finding FILE RULE TEXT [LINE] — one SARIF result as golangci-lint emits it.
 go_finding() {
-  printf '{"ruleId":"%s","message":{"text":"%s"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"%s"},"region":{"startLine":3}}}]}' "$2" "$3" "$1"
+  printf '{"ruleId":"%s","message":{"text":"%s"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"%s"},"region":{"startLine":%s}}}]}' "$2" "$3" "$1" "${4:-3}"
 }
 
 @test "complexity-diff: a same-package move of an over-budget func is not new" {
@@ -1080,8 +1080,266 @@ go_finding() {
 
   run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
   [ "$status" -eq 0 ]
-  [[ "$output" != *'`Moved`'* ]]
+  [[ "$output" != *'`Moved`'* ]] || false
   [[ "$output" == *'`Fresh`'* ]]
+}
+
+@test "complexity-diff: funlen tells same-named methods apart by receiver" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A).Run shrinks under budget, (*C).Run moves a.go -> c.go, a new long (*B).Run appears.
+  printf 'package pkg\n\nfunc (a *A) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (c *C) Run() {}\n' >"$dir/base/pkg/x.go"
+  printf 'package pkg\n\nfunc (b *B) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc (c *C) Run() {}\n' >"$dir/cur/pkg/c.go"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" \
+    "$(go_finding pkg/x.go funlen "Function 'Run' is too long (65 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (65 > 60)")" \
+    "$(go_finding pkg/c.go funlen "Function 'Run' is too long (65 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]] || false
+  [[ "$output" != *"pkg/c.go"* ]]
+}
+
+@test "complexity-diff: without --base-root an unchanged funlen stays pre-existing" {
+  # The edit hook passes no --base-root; both sides must fall back to file keys.
+  local dir="$BATS_TEST_TMPDIR/cx-noroot"
+  mkdir -p "$dir/pkg"
+  printf 'package pkg\n\nfunc (a *A) Run() {}\n' >"$dir/pkg/a.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  cp "$dir/base.sarif" "$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: funlen reads a receiver that spans several lines" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-multiline"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # funlen reports the ") Run() {" line; the unchanged method moves a.go -> b.go.
+  printf 'package pkg\n\nfunc (\n\ta *A,\n) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (\n\ta *A,\n) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: funlen reads a receiver behind a comment" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-comment"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A).Run shrinks under budget while a new long (*B).Run appears; both hide the receiver behind a comment.
+  printf 'package pkg\n\nfunc /* c */ (a *A) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc /* c */ (b *B) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]]
+}
+
+@test "complexity-diff: a moved method with a commented receiver is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-comment-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  printf 'package pkg\n\nfunc /* c */ (a *A) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc /* c */ (a *A) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: a moved method with a multi-line comment before the receiver is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-block-comment-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # The comment body starts at column 0, which must not read as another declaration.
+  printf 'package pkg\n\nfunc /*\nnote\n*/ (a *A) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc /*\nnote\n*/ (a *A) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: a func line inside a comment is not the declaration" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-comment-func"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A).Run shrinks under budget while a new long (*B).Run appears; the comment's "func" line must not hide the receiver.
+  printf 'package pkg\n\nfunc /*\nfunc Example()\n*/ (a *A) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc /*\nfunc Example()\n*/ (b *B) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)" 5)" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:5:"* ]]
+}
+
+@test "complexity-diff: a parenthesized receiver type is not read as the variable name" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-paren-type"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # Only the receiver variable is renamed; reading it as the type would make the finding new.
+  printf 'package pkg\n\nfunc (a *(A)) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (b *(A)) Run() {}\n' >"$dir/cur/pkg/a.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: a moved method with a parenthesized receiver type is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-paren-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  printf 'package pkg\n\nfunc (a *(A)) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (a *(A)) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: funlen tells parenthesized receiver types apart" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-paren-distinct"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A).Run shrinks under budget while a new long (*B).Run appears in another file.
+  printf 'package pkg\n\nfunc (a *(A)) Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (b *(B)) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (65 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]]
+}
+
+@test "complexity-diff: funlen does not read a commented receiver as a plain function" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-comment"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # A plain Run shrinks under budget while a new long method hides its receiver behind a comment.
+  printf 'package pkg\n\nfunc Run() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc /* c */ (b *B) Run() {}\n' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]]
+}
+
+@test "complexity-diff: funlen tells Unicode receivers apart" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-unicode"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A日).Run shrinks under budget while a new long (*A月).Run appears; \w would read both as A.
+  # Non-ASCII goes through %s so the printf format stays ASCII under any locale.
+  printf 'package pkg\n\nfunc (a *%s) Run() {}\n' 'A日' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (a *%s) Run() {}\n' 'A月' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]]
+}
+
+@test "complexity-diff: a moved method with a Unicode receiver is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-recv-unicode-move"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  printf 'package pkg\n\nfunc (a *%s) Run() {}\n' 'A日' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc (a *%s) Run() {}\n' 'A日' >"$dir/cur/pkg/b.go"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'Run' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-diff: funlen keys an init method by receiver, a plain init by file" {
+  local dir="$BATS_TEST_TMPDIR/cx-init-method"
+  mkdir -p "$dir/base/pkg" "$dir/cur/pkg"
+  # (*A).init moves a.go -> b.go unchanged; x.go's plain init shrinks while c.go gains one.
+  printf 'package pkg\n\nfunc (a *A) init() {}\n' >"$dir/base/pkg/a.go"
+  printf 'package pkg\n\nfunc init() { old() }\n' >"$dir/base/pkg/x.go"
+  printf 'package pkg\n\nfunc (a *A) init() {}\n' >"$dir/cur/pkg/b.go"
+  printf 'package pkg\n\nfunc init() {}\n' >"$dir/cur/pkg/c.go"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/a.go funlen "Function 'init' is too long (70 > 60)")" \
+    "$(go_finding pkg/x.go funlen "Function 'init' is too long (70 > 60)")" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' \
+    "$(go_finding pkg/b.go funlen "Function 'init' is too long (70 > 60)")" \
+    "$(go_finding pkg/c.go funlen "Function 'init' is too long (70 > 60)")" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" \
+    --base "$dir/base.sarif" --base-root "$dir/base" --root "$dir/cur"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"pkg/b.go"* ]] || false
+  [[ "$output" == *"pkg/c.go:3:"* ]]
+}
+
+@test "complexity-diff: a second over-budget init in another file is new" {
+  local dir="$BATS_TEST_TMPDIR/cx-init"
+  mkdir -p "$dir"
+  local init_a init_b
+  init_a="$(go_finding pkg/a.go gocognit 'cognitive complexity 25 of func `init` is high (> 20)')"
+  init_b="$(go_finding pkg/b.go gocognit 'cognitive complexity 25 of func `init` is high (> 20)')"
+  # a.go's init shrinks under budget while b.go gains a new over-budget init.
+  printf '{"runs":[{"results":[%s]}]}' "$init_a" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s]}]}' "$init_b" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pkg/b.go:3:"* ]]
 }
 
 @test "complexity-on-edit: degrades to advice after the retry cap" {
