@@ -40,9 +40,6 @@ func TestMain(m *testing.M) {
 
 func runOwnedSupervisorTestHerdr(args []string) int {
 	switch {
-	case slices.Equal(args, []string{"--version"}):
-		_, _ = fmt.Fprintln(os.Stdout, "herdr 0.7.5")
-		return 0
 	case len(args) >= 2 && slices.Equal(args[len(args)-2:], []string{"status", "--json"}):
 		return 1
 	case slices.Equal(args, []string{"server"}):
@@ -74,8 +71,12 @@ func runOwnedSupervisorTestServer() int {
 		}
 	}()
 	pidPath := filepath.Join(os.Getenv(xdgStateEnv), "test-server.pid")
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+	if err := os.WriteFile(pidPath+".tmp", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "write test herdr pid: %v\n", err)
+		return 1
+	}
+	if err := os.Rename(pidPath+".tmp", pidPath); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "publish test herdr pid: %v\n", err)
 		return 1
 	}
 	for {
@@ -175,6 +176,7 @@ func (s *fakeOwnedSupervisor) closeSockets() {
 }
 
 type processOwnedHarness struct {
+	ctx         context.Context
 	commonDir   string
 	runtimeBase string
 	layout      ownedLayout
@@ -184,6 +186,13 @@ type processOwnedHarness struct {
 
 func newProcessOwnedHarness(t *testing.T) processOwnedHarness {
 	t.Helper()
+	ctx := t.Context()
+	if deadline, ok := t.Deadline(); ok {
+		// Leave time for ensureOwned to reap the supervisor and retire its runtime.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-ownedShutdownGrace-ownedReadyTimeout))
+		t.Cleanup(cancel)
+	}
 	root, err := os.MkdirTemp("/tmp", "fho-stop-") //nolint:usetesting // Darwin Unix socket paths are limited to 103 bytes.
 	if err != nil {
 		t.Fatal(err)
@@ -212,39 +221,79 @@ func newProcessOwnedHarness(t *testing.T) processOwnedHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			log, readErr := os.ReadFile(filepath.Join(layout.runtimeDir, ownedSupervisorLogName))
+			t.Logf("supervisor log (read error: %v):\n%s", readErr, log)
+		}
+	})
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	herdr := filepath.Join(root, "herdr")
-	script := "#!/bin/sh\nexec " + shellQuote(executable) + " " + ownedSupervisorTestHerdrCommand + " \"$@\"\n"
+	// Admission needs only a version string, not another Go test process startup.
+	script := "#!/bin/sh\nif [ \"$#\" -eq 1 ] && [ \"$1\" = --version ]; then\n  printf 'herdr 0.7.5\\n'\n  exit 0\nfi\nexec " +
+		shellQuote(executable) + " " + ownedSupervisorTestHerdrCommand + " \"$@\"\n"
 	if err := os.WriteFile(herdr, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	backend := New(session, layout.socketPath)
 	backend.lookPath = func(string) (string, error) { return herdr, nil }
 	return processOwnedHarness{
+		ctx:       ctx,
 		commonDir: commonDir, runtimeBase: runtimeBase, layout: layout, backend: backend,
 		pidPath: filepath.Join(layout.xdgStateHome, "test-server.pid"),
 	}
 }
 
-func waitForTestServerPID(path string, timeout time.Duration) (int, error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(path)
+func (h processOwnedHarness) waitForTestServerPID(ctx context.Context) (int, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, fmt.Errorf("test herdr server did not publish its pid: %w", err)
+		}
+		data, err := os.ReadFile(h.pidPath)
 		if err == nil {
 			return strconv.Atoi(strings.TrimSpace(string(data)))
 		}
-		time.Sleep(10 * time.Millisecond)
+		if !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+		// The lease can still be unpublished; only its lock's lifetime matters here.
+		if _, running, err := inspectExistingSupervisorLease(h.layout.supervisorLock); !running {
+			return 0, fmt.Errorf("test herdr server did not publish its pid: %w", errors.Join(errOwnedSupervisorNotRunning, err))
+		}
+		if err := sleepContext(ctx, 10*time.Millisecond); err != nil {
+			return 0, fmt.Errorf("test herdr server did not publish its pid: %w", err)
+		}
 	}
-	return 0, fmt.Errorf("test herdr server did not publish its pid")
+}
+
+func TestWaitForTestServerPIDStops(t *testing.T) {
+	h := processOwnedHarness{
+		pidPath: filepath.Join(t.TempDir(), "missing.pid"),
+		layout:  ownedLayout{supervisorLock: filepath.Join(t.TempDir(), "supervisor.lock")},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	pid, err := h.waitForTestServerPID(ctx)
+	if pid != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitForTestServerPID() = %d, %v, want 0, context cancellation", pid, err)
+	}
+	err = os.WriteFile(h.layout.supervisorLock, nil, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err = h.waitForTestServerPID(t.Context())
+	if pid != 0 || !errors.Is(err, errOwnedSupervisorNotRunning) {
+		t.Fatalf("waitForTestServerPID() = %d, %v, want 0, supervisor stopped", pid, err)
+	}
 }
 
 func assertProcessOwnedRetired(t *testing.T, harness processOwnedHarness, serverPID int, ensureErr error) {
 	t.Helper()
 	if err := syscall.Kill(serverPID, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("test herdr server pid %d still exists: %v", serverPID, err)
+		t.Fatalf("test herdr server pid %d still exists: %v; ensure error: %v", serverPID, err, ensureErr)
 	}
 	if err := validateRetiredOwnedSession(harness.layout); err != nil {
 		t.Fatalf("retired owned session validation: %v; ensure error: %v", err, ensureErr)
@@ -253,37 +302,38 @@ func assertProcessOwnedRetired(t *testing.T, harness processOwnedHarness, server
 
 func TestFreshReadinessFailureGracefullyStopsServerProcessGroup(t *testing.T) {
 	harness := newProcessOwnedHarness(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(harness.ctx)
 	defer cancel()
-	type readyResult struct {
-		pid int
-		err error
-	}
-	ready := make(chan readyResult, 1)
-	go func() {
-		pid, err := waitForTestServerPID(harness.pidPath, 3*time.Second)
+	serverPID := 0
+	writeMarker := func(path string, marker ownerMarker) error {
+		if err := writeOwnerMarkerExclusive(path, marker); err != nil {
+			return err
+		}
+		// Observe the server before entering the production readiness timeout.
+		pid, err := harness.waitForTestServerPID(ctx)
+		if err != nil {
+			return err
+		}
+		serverPID = pid
 		cancel()
-		ready <- readyResult{pid: pid, err: err}
-	}()
+		return nil
+	}
 
 	_, ensureErr := ensureOwned(
 		ctx,
 		OwnedOptions{GitCommonDir: harness.commonDir, RuntimeBase: harness.runtimeBase},
 		harness.backend,
 		startOwnedSupervisor,
+		writeMarker,
 	)
-	result := <-ready
-	if result.err != nil {
-		t.Fatal(result.err)
-	}
-	if !errors.Is(ensureErr, context.Canceled) {
+	if serverPID <= 1 || !errors.Is(ensureErr, context.Canceled) {
 		t.Fatalf("ensureOwned() error = %v, want context cancellation after server start", ensureErr)
 	}
 	lease, _, err := inspectExistingSupervisorLease(harness.layout.supervisorLock)
-	if err != nil || lease.ServerPID != result.pid {
-		t.Fatalf("supervisor lease server pid = %d, err=%v, want %d", lease.ServerPID, err, result.pid)
+	if err != nil || lease.ServerPID != serverPID {
+		t.Fatalf("supervisor lease server pid = %d, err=%v, want %d; ensure error: %v", lease.ServerPID, err, serverPID, ensureErr)
 	}
-	assertProcessOwnedRetired(t, harness, result.pid, ensureErr)
+	assertProcessOwnedRetired(t, harness, serverPID, ensureErr)
 }
 
 func TestPublishedMarkerFailureGracefullyStopsObservedServer(t *testing.T) {
@@ -294,7 +344,7 @@ func TestPublishedMarkerFailureGracefullyStopsObservedServer(t *testing.T) {
 		if err := writeOwnerMarkerExclusive(path, marker); err != nil {
 			return err
 		}
-		pid, err := waitForTestServerPID(harness.pidPath, 3*time.Second)
+		pid, err := harness.waitForTestServerPID(harness.ctx)
 		if err != nil {
 			return err
 		}
@@ -303,7 +353,7 @@ func TestPublishedMarkerFailureGracefullyStopsObservedServer(t *testing.T) {
 	}
 
 	_, ensureErr := ensureOwned(
-		context.Background(),
+		harness.ctx,
 		OwnedOptions{GitCommonDir: harness.commonDir, RuntimeBase: harness.runtimeBase},
 		harness.backend,
 		startOwnedSupervisor,
