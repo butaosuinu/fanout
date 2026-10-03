@@ -9,6 +9,26 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## 未リリース
+
+v0.17.0 以降にマージ済みの変更からまとめた草案です。リリース日とタグ対象は未確定です。
+
+- herdr backend を選択した状態で端末から引数なしの `fanout` を実行すると、owned session へ直接 attach し、console pane で TUI を開きます。
+  cold restart 後は復元された launcher を検証して console を開き直し、TUI 終了後は再利用できる shell を残します。
+  [herdr backend]({{< relref "/docs/herdr-backend" >}}) を参照。
+- Herdr の plan cleanup は、同じ repository の別 Session を閉じずに対象 coordinator を退役させます。
+  再登録した cleanup shell と所有を検証できた attached agent の cleanup、shell 手動閉鎖後の stale row の shutdown にも対応しました。
+  所有権の証拠が不足する場合は cleanup を停止します。[herdr backend]({{< relref "/docs/herdr-backend" >}}) を参照。
+- Codex team と Plan の controller が各接続で thread event を購読し、turn 完了通知の取り逃しと初回応答後の team message 配信を修正しました。
+  [#816](https://github.com/butaosuinu/fanout/pull/816) を参照。
+- dashboard の Session PR 欄に stack 内の位置を表示し、詳細ドロワーに branch 関係から推定した chain を含む PR stack を表示します。
+  merge と削除のボタンは stack を考慮しないため、下層から順に merge してください。[モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
+- Codex 版 `$session-retro` skill を追加し、過去の tool failure、CI failure、review finding を保存済み snapshot と比較して修正を提案できるようにしました。
+  Codex の review 指示も、作業目的、受入条件、承認済みのトレードオフを根拠に指摘する形へ更新しました。
+  [エージェント連携]({{< relref "/docs/agent-integrations" >}}) と [#846](https://github.com/butaosuinu/fanout/pull/846) を参照。
+
+[#812](https://github.com/butaosuinu/fanout/issues/812) の子修正6件はマージ済みですが、実 provider を使う全 baseline の受入確認は未完了です。
+
 ## v0.17.0 (2026-08-21)
 
 - **fanout-owned な herdr ワークフロー。** opt-in の herdr backend は repository-owned session を作成または再利用し、workspace と worktree を用意して issue / Project / plan / watcher を検証済みの非 shell 経路で起動します。

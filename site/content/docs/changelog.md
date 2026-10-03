@@ -9,6 +9,26 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## Unreleased
+
+Draft highlights of changes merged since v0.17.0. The release date and tag target are not set.
+
+- With the herdr backend selected, bare `fanout` now attaches directly from a terminal and opens the TUI in the owned console pane.
+  After a cold restart, it verifies the restored launcher before reopening the console; quitting the TUI leaves a shell for reuse.
+  See [herdr backend]({{< relref "/docs/herdr-backend" >}}).
+- Herdr plan cleanup now retires its coordinator without closing other Sessions in the same repository.
+  Cleanup also handles re-registered cleanup shells and verified attached agents, and shutdown retires stale rows after manual shell closure.
+  Missing ownership evidence still stops cleanup. See [herdr backend]({{< relref "/docs/herdr-backend" >}}).
+- Codex team and Plan controllers now subscribe to thread events on their own connections, fixing missed turn completion notifications and team delivery after the initial response.
+  See [#816](https://github.com/butaosuinu/fanout/pull/816).
+- The dashboard's Session PR column now shows stack position, and the detail drawer shows the PR stack, including inferred branch chains.
+  Merge and delete buttons remain unaware of stacks; merge from the bottom layer up. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- Codex's new `$session-retro` skill compares past tool failures, CI failures, and review findings with a saved snapshot to propose fixes.
+  Codex review guidance now grounds findings in the task's purpose, acceptance criteria, and approved tradeoffs.
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) and [#846](https://github.com/butaosuinu/fanout/pull/846).
+
+The six child fixes tracked by [#812](https://github.com/butaosuinu/fanout/issues/812) are merged; full live-provider baseline acceptance remains incomplete.
+
 ## v0.17.0 (2026-08-21)
 
 - **fanout-owned herdr workflows.** The opt-in herdr backend now creates or adopts a repository-owned session, provisions its workspaces and worktrees, and launches issue, Project, plan, and watcher work through a verified non-shell path.
