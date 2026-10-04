@@ -814,6 +814,7 @@ func installTUISequentialTmuxShim(t *testing.T, repo string) string {
 set -euo pipefail
 printf '%s\n' "$@" >> "$TMUX_SHIM_ARGS"
 printf '%s\n' '---' >> "$TMUX_SHIM_ARGS"
+if [[ "${1:-}" == "-u" ]]; then shift; fi
 case "${1:-}" in
   split-window)
     read -r current < "$TMUX_SHIM_COUNTER"
