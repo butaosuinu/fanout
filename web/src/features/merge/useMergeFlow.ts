@@ -71,7 +71,7 @@ export function useMergeFlow(
   const affordanceFor = useCallback(
     (parent: string, pane: PaneView): MergeAffordance | null => {
       const repo = snap?.repo ?? "";
-      const pr = mergeTargetPr(pane.prs, repo, branchOf(pane));
+      const pr = mergeTargetPr(pane.prs, { repo, branch: branchOf(pane), others: repoPrs });
       const query = rowQuery(parent, pane);
       /* PR も identity も無い行にはボタンごと出さない。無効なボタンを並べても
        * 「いつかマージできる行」ではないので、情報が増えない。 */

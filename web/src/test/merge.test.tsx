@@ -393,6 +393,35 @@ describe("無効化", () => {
     expect(calls).toHaveLength(0);
   });
 
+  /* 1 つの行が上下 2 層を持つとき、上の層を対象にすると唯一のボタンが無効になり、
+   * マージできる下の層に届かない。 */
+  it("同じ行に下の層があれば、その下の層をマージ対象にする", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "",
+            prs: [
+              makePr({ headRef: "fanout/upper", baseRef: "fanout/lower" }),
+              makePr({ number: 700, headRef: "fanout/lower" }),
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    expect(within(drawer).getByRole("button", { name: "#700 をマージ" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
   /* branch protection の内容は wire に無いので、押せるままにして警告を出す。 */
   it("CI 失敗は押せるが、本体を押すと警告付きのメニューが開く", async () => {
     const calls: MergeCall[] = [];

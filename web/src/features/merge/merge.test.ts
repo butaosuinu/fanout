@@ -186,18 +186,18 @@ describe("mergeTargetPr", () => {
 
   it("merged PR と open PR が並ぶ行では open を採る", () => {
     const prs = [makePr({ number: 700, state: "MERGED" }), makePr({ number: 701 })];
-    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(701);
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: [] })?.number).toBe(701);
   });
 
   it("open が無ければ所有している先頭に落ちる", () => {
     const prs = [makePr({ number: 700, state: "MERGED" })];
-    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(700);
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: [] })?.number).toBe(700);
   });
 
   /* 別 repository を base にする PR は番号だけ渡すと別 PR を掴む。 */
   it("別 repository の PR は対象にしない", () => {
     const prs = [makePr({ number: 700, baseRepo: "other/repo" })];
-    expect(mergeTargetPr(prs, REPO, "")).toBeNull();
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: [] })).toBeNull();
   });
 
   /* branch 行の PR は head branch 名でしか結び付いていないので、fork が先頭に
@@ -207,37 +207,49 @@ describe("mergeTargetPr", () => {
       makePr({ number: 700, headRepo: "stranger/fork", headRef: "fanout/fix-thing" }),
       makePr({ number: 701, headRepo: REPO, headRef: "fanout/fix-thing" }),
     ];
-    expect(mergeTargetPr(prs, REPO, "fanout/fix-thing")?.number).toBe(701);
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "fanout/fix-thing", others: [] })?.number).toBe(
+      701,
+    );
   });
 
   it("branch 行では head branch 名の違う PR を対象にしない", () => {
     const prs = [makePr({ number: 700, headRef: "other" })];
-    expect(mergeTargetPr(prs, REPO, "fanout/fix-thing")).toBeNull();
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "fanout/fix-thing", others: [] })).toBeNull();
   });
 
   /* issue 行は closing-PR link が identity なので fork PR も正当。 */
   it("issue 行では fork PR も対象にする", () => {
     const prs = [makePr({ number: 700, headRepo: "stranger/fork" })];
-    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(700);
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: [] })?.number).toBe(700);
   });
 
   /* 先頭の open を無条件に採ると、draft 1 本のせいで後続の実行可能な PR に
    * 永久に手が届かない。 */
   it("draft より preflight を通る open を先に採る", () => {
     const prs = [makePr({ number: 700, isDraft: true }), makePr({ number: 701 })];
-    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(701);
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: [] })?.number).toBe(701);
   });
 
   it("CONFLICTING より衝突していない open を先に採る", () => {
     const prs = [makePr({ number: 700, mergeable: "CONFLICTING" }), makePr({ number: 701 })];
-    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(701);
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: [] })?.number).toBe(701);
   });
 
   /* 全部 draft なら「draft はマージできません」を出すために draft を掴む。
    * 対象なしにすると理由が「PR がありません」に化ける。 */
   it("実行可能な open が無ければ open の先頭に落ちる", () => {
     const prs = [makePr({ number: 700, isDraft: true })];
-    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(700);
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: [] })?.number).toBe(700);
+  });
+
+  /* 上の層を選ぶと唯一のボタンが下の層を待って無効になり、マージできる下の層に
+   * 届かない。 */
+  it("stack の上下 2 層を持つ行では下の層を先に採る", () => {
+    const prs = [
+      makePr({ number: 701, baseRef: "fanout/lower" }),
+      makePr({ number: 700, headRef: "fanout/lower" }),
+    ];
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: prs })?.number).toBe(700);
   });
 });
 

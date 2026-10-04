@@ -92,14 +92,18 @@ function ownedByRow(pr: PRRef, repo: string, branch: string): boolean {
  * 同じ理由で PrimaryPR を避けているので、こちらも open を先に採る。open が
  * 無いときは、所有している中の先頭に落ちる。
  *
- * branch は branch-backed 行の記録 branch、issue 行では ""。 */
+ * 下の層を待つ PR も後回しにする。1 つの行が stack の上下 2 層を持つとき、上の層を
+ * 選ぶと唯一のボタンが下の層を待って無効になり、マージできる下の層に届かない。
+ *
+ * branch は branch-backed 行の記録 branch、issue 行では ""。others は layerBelow
+ * に渡す、snapshot にあるこの repository の PR。 */
 export function mergeTargetPr(
   prs: PRRef[] | null | undefined,
-  repo: string,
-  branch: string,
+  { repo, branch, others }: { repo: string; branch: string; others: readonly PRRef[] },
 ): PRRef | null {
   const owned = (prs ?? []).filter((pr) => ownedByRow(pr, repo, branch));
-  return owned.find(actionable) ?? owned.find(isOpen) ?? owned[0] ?? null;
+  const ready = (pr: PRRef) => actionable(pr) && layerBelow(pr, others, repo) === null;
+  return owned.find(ready) ?? owned.find(actionable) ?? owned.find(isOpen) ?? owned[0] ?? null;
 }
 
 /* PR そのものを見て押せないと分かる状態。判定順は prDisplayState と揃える —
