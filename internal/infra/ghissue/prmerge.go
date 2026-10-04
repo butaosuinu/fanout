@@ -450,6 +450,11 @@ func (r Runner) OpenPRNumbersFromBranch(ctx context.Context, owner, repo, branch
 	if err := json.Unmarshal(out, &rows); err != nil {
 		return nil, err
 	}
+	// A full page may push this repository's row onto the next one, and an
+	// empty answer is the one that lets the merge through.
+	if len(rows) >= openHeadListLimit {
+		return nil, fmt.Errorf("more than %d open pull requests listed", openHeadListLimit)
+	}
 	var nums []int
 	for _, row := range rows {
 		if row.Head.Repo != nil && strings.EqualFold(row.Head.Repo.FullName, owner+"/"+repo) {

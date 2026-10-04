@@ -552,4 +552,17 @@ func TestOpenPRNumbersFromBranch(t *testing.T) {
 			t.Fatalf("OpenPRNumbersFromBranch() args = %q, missing %q", data, want)
 		}
 	}
+
+	// A full page can hide this repository's row on the next one; an empty
+	// answer would let the merge through.
+	t.Run("refuses a page that may be truncated", func(t *testing.T) {
+		rows := make([]string, openHeadListLimit)
+		for i := range rows {
+			rows[i] = fmt.Sprintf(`{"number":%d,"head":{"repo":{"full_name":"o/r-mirror"}}}`, i+1)
+		}
+		installFakeGH(t, "["+strings.Join(rows, ",")+"]")
+		if _, err := (Runner{}).OpenPRNumbersFromBranch(context.Background(), "o", "r", "fanout/lower"); err == nil {
+			t.Fatal("OpenPRNumbersFromBranch() error = nil, want the truncation refusal")
+		}
+	})
 }
