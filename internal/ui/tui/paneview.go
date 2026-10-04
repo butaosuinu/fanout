@@ -123,7 +123,7 @@ func (p paneView) tableRow() table.Row {
 		dash(p.backendLabel()),
 		tmuxState,
 		dash(p.IssueState),
-		truncate(dash(p.PRSummary), 12),
+		truncate(dash(p.PRSummary), 16),
 		truncate(dash(p.CIStatus), 7),
 		dash(p.DiffSummary),
 		dash(p.DirtyState),
@@ -199,7 +199,7 @@ func columnsForWidth(width int) []table.Column {
 		{Title: "BACKEND", Width: 7},
 		{Title: "RUNTIME", Width: 7},
 		{Title: "STATE", Width: 8},
-		{Title: "PR", Width: 12},
+		{Title: "PR", Width: 16},
 		{Title: "CI", Width: 7},
 		{Title: "DIFF", Width: 8},
 		{Title: "DIRTY", Width: 7},
@@ -310,12 +310,18 @@ func issueTitle(status issueStatus, num int) string {
 	return "#" + strconv.Itoa(num)
 }
 
+// summarizePRs is the PR column: the primary pull request and, when it sits in
+// a GitHub-native stack, its layer as the web dashboard's tag shows it.
 func summarizePRs(prs []ghissue.PRRef) string {
 	pr, ok := ghissue.PrimaryPR(prs)
 	if !ok {
 		return "-"
 	}
-	return "#" + strconv.Itoa(pr.Number) + " " + dash(pr.DisplayState())
+	summary := "#" + strconv.Itoa(pr.Number) + " " + dash(pr.DisplayState())
+	if s := pr.Stack; s != nil {
+		summary += fmt.Sprintf(" ⧉ %d/%d", s.Position, s.Size)
+	}
+	return summary
 }
 
 func (p paneView) itemLabel() string {

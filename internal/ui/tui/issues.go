@@ -78,9 +78,11 @@ type ghLoadedMsg struct {
 }
 
 type issueStatusProvider interface {
+	NameWithOwner() string
 	IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error)
 	BranchPRs(branch string) ([]ghissue.PRRef, error)
 	Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error)
+	PRStacks(nums []int) (map[int]*ghissue.PRStack, error)
 }
 
 type issueStatusResolver func(projectRoot string) (issueStatusProvider, error)
@@ -105,6 +107,13 @@ type issueStatusLoader struct {
 	prCache     map[int]issueStatus
 	branchCache map[string]branchStatus
 	waveCache   map[string]issueWaveCacheEntry
+
+	// stacks is the last known native stack of each of this repository's pull
+	// requests, for the PR column's position tag. stackNums and
+	// lastStackRefresh throttle the read the way the dashboard poller does.
+	stacks           map[int]*ghissue.PRStack
+	stackNums        []int
+	lastStackRefresh time.Time
 }
 
 func newIssueStatusLoader(waveInterval time.Duration) *issueStatusLoader {
@@ -120,6 +129,7 @@ func newIssueStatusLoader(waveInterval time.Duration) *issueStatusLoader {
 		prCache:     map[int]issueStatus{},
 		branchCache: map[string]branchStatus{},
 		waveCache:   map[string]issueWaveCacheEntry{},
+		stacks:      map[int]*ghissue.PRStack{},
 	}
 }
 
@@ -337,7 +347,55 @@ func (l *issueStatusLoader) loadIssueStatuses(
 			PRs:   cached.PRs,
 		}
 	}
-	return statuses, loadErr
+	return l.attachStacks(statuses, now), loadErr
+}
+
+// attachStacks puts each pull request's native stack on the statuses, for the
+// PR column's position tag. Stacks are read the way the dashboard poller reads
+// them: when the set of this repository's pull requests changes, and on the
+// wave interval otherwise. They are display only, so a failed read keeps the
+// last known stacks and never fails the refresh.
+//
+// ponytail: a stack whose reads keep failing is kept indefinitely, where the
+// poller drops it after staleStacksAfter waves. Add the bound if stale tags show.
+func (l *issueStatusLoader) attachStacks(statuses map[issueKey]issueStatus, now time.Time) map[issueKey]issueStatus {
+	repo := l.gh.NameWithOwner()
+	if repo == "" {
+		return statuses
+	}
+	nums := repoPRNumbers(statuses, repo)
+	if len(nums) > 0 && (!slices.Equal(nums, l.stackNums) || now.Sub(l.lastStackRefresh) >= l.waveInterval) {
+		l.stackNums, l.lastStackRefresh = nums, now
+		fetched, _ := l.gh.PRStacks(nums)
+		maps.Copy(l.stacks, fetched)
+	}
+	for key, status := range statuses {
+		// The PR slices are shared with the caches; tag copies.
+		prs := slices.Clone(status.PRs)
+		for i := range prs {
+			if strings.EqualFold(prs[i].BaseRepo, repo) {
+				prs[i].Stack = l.stacks[prs[i].Number]
+			}
+		}
+		status.PRs = prs
+		statuses[key] = status
+	}
+	return statuses
+}
+
+// repoPRNumbers is every pull request number based in repo, sorted. A number
+// alone names a pull request only within one repository.
+func repoPRNumbers(statuses map[issueKey]issueStatus, repo string) []int {
+	var nums []int
+	for _, status := range statuses {
+		for _, pr := range status.PRs {
+			if strings.EqualFold(pr.BaseRepo, repo) && !slices.Contains(nums, pr.Number) {
+				nums = append(nums, pr.Number)
+			}
+		}
+	}
+	slices.Sort(nums)
+	return nums
 }
 
 func (l *issueStatusLoader) refreshUnrecordedIssuePRs(

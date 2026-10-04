@@ -388,6 +388,10 @@ msgstr "GitHub state is unavailable"
 msgid "バイナリのため patch なし"
 msgstr "no patch — binary"
 
+#: src/features/drawer/StackMap.tsx
+msgid "この行の詳細を開く"
+msgstr "Open this row's details"
+
 #: src/features/merge/DeleteBranchButton.tsx
 msgid "ブランチを削除できませんでした(接続エラー)"
 msgstr "Could not delete the branch (connection error)"

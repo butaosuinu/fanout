@@ -4,12 +4,14 @@ import type { PaneView, PRRef } from "../../transport/types";
 import { PrPill } from "../sessions/badges";
 import { paneLabel, paneName } from "../sessions/pane";
 import { sameRepo, type StackLayer, type StackView } from "../sessions/stack";
+import { useSelectStackOwner } from "../sessions/StackIndex";
 
 /* ドロワーの stack map。上の層ほど上に並べ、底に trunk(stack の base)を置く。
  *
  * この行の PR は renderOwn で描く — 行のコピーには CI・競合・コメントと Delete
  * branch が付く。Delete branch はサーバが行の head と照合するので、他の行や stack
- * 取得のコピーでは描かない。他の行の層は状態ピルとその行の名前だけ。 */
+ * 取得のコピーでは描かない。他の行の層は状態ピルとその行の名前だけで、名前を
+ * 押すとその行のドロワーへ切り替わる。 */
 export function StackMap({
   view,
   pane,
@@ -67,6 +69,7 @@ function StackLayerRow({
   renderOwn: (pr: PRRef) => ReactNode;
 }) {
   const { t } = useLingui();
+  const selectOwner = useSelectStackOwner();
   if (own) {
     return (
       <li className="d-stack-layer self" aria-current="true">
@@ -76,12 +79,25 @@ function StackLayerRow({
       </li>
     );
   }
-  const owners = layer.owners.map((o) => paneName(o) || paneLabel(o)).join(", ");
   return (
     <li className="d-stack-layer">
       <span className="d-stack-pos">{layer.position}</span>
       <PrPill repo={repo} pr={layer.pr} />
-      {owners && <span className="muted">{owners}</span>}
+      {layer.owners.length > 0 && (
+        <span className="muted">
+          {layer.owners.map((o) => (
+            <button
+              key={`${o.paneId}:${paneLabel(o)}:${o.slug}`}
+              type="button"
+              className="diff-link"
+              title={t`この行の詳細を開く`}
+              onClick={() => selectOwner(o)}
+            >
+              {paneName(o) || paneLabel(o)}
+            </button>
+          ))}
+        </span>
+      )}
     </li>
   );
 }

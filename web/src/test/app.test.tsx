@@ -367,6 +367,14 @@ describe("snapshot 描画", () => {
     expect(
       within(drawer).getByRole("link", { name: "#839 closed" }).closest("li.d-stack"),
     ).toBeNull();
+
+    // 他の行の名前を押すと、その行のドロワーへ切り替わる
+    await user.click(within(layers[0]!).getByRole("button", { name: "Layer three" }));
+    const self = within(screen.getByRole("complementary", { name: "ペイン詳細" }))
+      .getByText("◀ この Session")
+      .closest("li")!;
+    expect(within(self).getByRole("link", { name: "#845 open" })).toBeInTheDocument();
+    expect(other).toHaveClass("selected");
   });
 
   it("base が別の行の PR の head なら推定の連鎖として出す", async () => {

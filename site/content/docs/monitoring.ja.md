@@ -32,6 +32,7 @@ tmux backend では、素のシェルから起動すると fanout 管理の tmux
 herdr backend では、素のシェルから起動するとリポジトリの fanout-owned session と console workspace を bootstrap し、そのまま session に入ります(端末がない場合は attach command を表示します)。
 コンソールは `.fanout/state.json` を読み、記録済みペインの issue と PR の状態を定期更新し、各行の worktree には変更量を `+X/-Y`、未 commit の作業の有無を `dirty` / `clean` で示します。
 `RUN` 列には agent の実行状態がグリフで出て(起動ラッパー由来の `●` running・`✓` done に加え、agent hooks が報告すると `◐` working・`◇` plan・`◆` blocked・`○` idle)、detail panel には同じ値が `run=` として出ます。
+GitHub の native stack に属する PR は、`PR` 列に `⧉ 2/3` の形で層の位置が付きます。GitHub から約 1 分ごとに読みます。
 マウスや tmux の `prefix` ペイン移動で記録済み tmux ペインへフォーカスすると、TUI の選択行もそのペインに追従します。
 
 コンソールは backend を認識します。ヘッダには選択中の runtime backend と選択理由(例: `backend: herdr (HERDR_ENV)`)が出て、detail panel には各行の `backend=` と `pane=` の identity が出ます。
@@ -196,7 +197,7 @@ conflict タグは GitHub が競合を報告したときだけ出ます。merge 
 stacked PR の層にある PR には、`pr` 列に `⧉ 2/3` タグが付きます。base branch から
 数えて 3 層中の 2 層目という意味です。詳細ドロワーは stack を 1 本の柱として描き、
 上の層ほど上、底に base branch を置きます。この行の PR にはいつものタグと
-`◀ この Session` の印が、他の行が持つ層にはその行の名前が付き、どの行にも無い層は
+`◀ この Session` の印が、他の行が持つ層にはその行の名前が付き(押すとその行のドロワーに切り替わります)、どの行にも無い層は
 状態ピルだけです。GitHub の native stacked PR は GitHub から約 1 分ごとに読みます。
 同じ repository で、base branch がダッシュボード上の別の open な PR の head branch に
 なっている open な PR も、推定の連鎖として同じように描きます。見出しに「推定」と

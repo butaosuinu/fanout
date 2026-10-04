@@ -388,6 +388,10 @@ msgstr "GitHub の情報を取得できていません"
 msgid "バイナリのため patch なし"
 msgstr "バイナリのため patch なし"
 
+#: src/features/drawer/StackMap.tsx
+msgid "この行の詳細を開く"
+msgstr "この行の詳細を開く"
+
 #: src/features/merge/DeleteBranchButton.tsx
 msgid "ブランチを削除できませんでした(接続エラー)"
 msgstr "ブランチを削除できませんでした(接続エラー)"

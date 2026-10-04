@@ -47,6 +47,20 @@ type countingIssueStatusProvider struct {
 	waveCalls   map[string]int
 	waveNums    map[string][]int
 	waves       map[string]sessionview.WaveGraph
+	repo        string
+	stacks      map[int]*ghissue.PRStack
+	stackCalls  [][]int
+}
+
+func (f *countingIssueStatusProvider) NameWithOwner() string { return f.repo }
+
+func (f *countingIssueStatusProvider) PRStacks(nums []int) (map[int]*ghissue.PRStack, error) {
+	f.stackCalls = append(f.stackCalls, slices.Clone(nums))
+	out := make(map[int]*ghissue.PRStack, len(nums))
+	for _, num := range nums {
+		out[num] = f.stacks[num]
+	}
+	return out, nil
 }
 
 func (f *countingIssueStatusProvider) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
@@ -378,6 +392,60 @@ func TestIssueStatusLoaderThrottlesWaveAndUnrecordedPRsAcrossTicks(t *testing.T)
 	}
 	if gh.waveCalls["100"] != 2 || gh.issueCalls[101] != 3 || gh.issueCalls[102] != 2 {
 		t.Fatalf("calls after wave interval = wave:%v issue:%v, want wave=2 #101=3 #102=2", gh.waveCalls, gh.issueCalls)
+	}
+}
+
+// TestIssueStatusLoaderTagsStackedPRs pins the PR column's stack tag: stacks
+// are read for this repository's pull requests only, on the wave cadence like
+// the dashboard poller, and land on the row's primary PR.
+func TestIssueStatusLoaderTagsStackedPRs(t *testing.T) {
+	root := t.TempDir()
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"layer-two","paneId":"%1"}
+	]}`)
+	gh := &countingIssueStatusProvider{
+		repo: "o/r",
+		waves: map[string]sessionview.WaveGraph{"100": {
+			Children: []ghissue.Issue{{Number: 101, Title: "layer two", State: "OPEN"}},
+			Info:     map[int]sessionview.WaveInfo{101: {Wave: 1}},
+		}},
+		issuePRs: map[int][]ghissue.PRRef{101: {
+			{Number: 844, State: "OPEN", BaseRepo: "o/r"},
+			// Another repository's #7 shares nothing with this one's.
+			{Number: 7, State: "CLOSED", BaseRepo: "other/repo"},
+		}},
+		stacks: map[int]*ghissue.PRStack{844: {Number: 12, Size: 3, BaseRef: "main", Position: 2}},
+	}
+	loader := newIssueStatusLoader(time.Minute)
+	loader.resolve = func(string) (issueStatusProvider, error) { return gh, nil }
+	firstAt := time.Unix(100, 0)
+
+	statuses, err := loader.loadIssueStatuses(root, nil, firstAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := statuses[keyForIssue("100", 101)]
+	if got := summarizePRs(status.PRs); got != "#844 open ⧉ 2/3" {
+		t.Fatalf("summarizePRs() = %q, want the stack tag", got)
+	}
+	if !reflect.DeepEqual(gh.stackCalls, [][]int{{844}}) {
+		t.Fatalf("PRStacks calls = %v, want this repository's #844 only", gh.stackCalls)
+	}
+	if loader.prCache[101].PRs[0].Stack != nil {
+		t.Fatal("the PR cache was tagged in place, want a tagged copy")
+	}
+
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(20*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh.stackCalls) != 1 {
+		t.Fatalf("PRStacks calls inside the wave interval = %d, want 1", len(gh.stackCalls))
+	}
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh.stackCalls) != 2 {
+		t.Fatalf("PRStacks calls after the wave interval = %d, want 2", len(gh.stackCalls))
 	}
 }
 

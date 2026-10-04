@@ -200,7 +200,8 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
   409 `branch_is_base` で拒否する。一覧は `--limit` で打ち切られても、載った行は全部
   数える。
 
-## 残っていること
+## 表示側(mutation の不変条件ではない)
 
-- TUI の PR 列に stack の位置を出すことと、ドロワーの stack map で他の行の名前から
-  その行のドロワーへ切り替えることは、mutation の不変条件と独立した表示の残件(#839)。
+- TUI の PR 列は、native stack の層の位置を `⧉ 2/3` で出す。stack は dashboard の poller と
+  同じ読み取り(`GH.PRStacks`)を wave 間隔ごとに行い、表示にだけ使う。
+- ドロワーの stack map は、他の行の名前からその行のドロワーへ切り替える。
