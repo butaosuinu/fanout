@@ -207,8 +207,7 @@ binary は version 2 を拒否するので、`agent` を黙って無視して全
 `sessionview.PaneView` と `web/src/transport/types.ts` に同名フィールドを足し、TUI と
 web の agent セルを `Selection.String()` 形式にする(未指定なら name のみ)。
 
-restore は記録値を再注入する。mode と違い、model / effort は会話状態ではなく
-プロセス引数で、`claude --continue` は `--model` なしだと既定モデルに戻る。安価に
+restore は記録値を再注入する。`claude --continue` は `--model` なしだと既定モデルに戻る。安価に
 起動した子が復元時に格上げされて quota を食うのを防ぐ。codex の `--model` / `-c` を
 `resume --last` の前に置くか後に置くかは #363 の PR 内で実機確認して決め(誤った語順の
 復元処理を先にマージしない)、結果を本書に追記する。Herdr の再起動(同じ capsule
@@ -219,7 +218,8 @@ Args を再利用しない。この経路は `LaunchCapsule` に `Model` / `Effo
 argv を組み直す。あわせて `internal/infra/state/launch_intents.go` の `validResumeLaunch`
 (現状は `resume <ref>` の 2 引数を厳密に要求し、外れると `journal.Save()` が intent を拒む)を
 「選択込みの canonical resume argv と session ref の両方を検証する」形に更新し、journal の
-round-trip テストと recovery テストで固定する(#363)。
+round-trip テストと recovery テストで固定する(#363)。OpenCode の履歴と再指定の優先関係は
+下記の #362 実測結果を参照する。
 
 ### 7. codex app-server lane
 
@@ -238,9 +238,9 @@ team bridge lane が `Build*` を通らず、受理した model / effort を黙�
 外す。受理した指定が無視される中間状態を作らない。
 
 Codex Plan Mode の復元(`cmd/fanout/tui_restore.go` → `codexapp.ResumeLaunchCommand`)は
-thread 再開で model は thread に付くため `--model` の再注入は不要。effort が thread settings
-に残るかは未確認で #362 の検証項目に含め、残らなければ `ResumeLaunchCommand` にも
-`--effort` を通す。
+thread 再開で model は thread に付くため `--model` の再注入は不要。0.155.1 では Plan turn
+完了後の effort も app-server 再起動と remote TUI の resume 後に保持された(#362、下記)。
+この条件では effort 消失を理由とする `--effort` の再注入は不要。旧版と turn 未実行時は未確認。
 
 ### 8. skill の推奨
 
@@ -288,18 +288,63 @@ thread 再開で model は thread に付くため `--model` の再注入は不�
   再生成になる。各子 PR 内で行う。
 - state に 2 フィールド増え、sessionview と web の手書き契約(`types.ts`)を同時に
   更新する。フィルタは agent 名のまま。
-- 値の妥当性は CLI 任せなので、typo は CLI のエラーで露見する。即終了するか通知だけで
-  継続するかは CLI ごとに違い、#362 で確認する。
+- 値の妥当性は CLI 任せで、不正値を通知した後も対話や別の設定値での実行が続く場合がある。
+  起動成功と指定値の有効性は別に扱う(#362、下記)。
 - opencode は model のみ。effort を付けると起動前にエラーになる。
 - fanout-plan skill の「schema に agent を足すな」ルールを撤回し、codex 側 skill の
   parity テスト(`internal/arch/codex_integrations_test.go`)を満たして更新する。
 - `agent` 付き spec は version 2 になるため、新 binary で作った spec を旧 binary に渡すと
   version エラーで止まる。黙って全 task を同じ agent で起動するより安全側。
-- 未確認(spike #362 で確定し、本節を更新する): resume 時のモデル再指定が 3 CLI で
-  効くか(不正な model / effort を渡したときの各 CLI の挙動、codex app-server の
-  `-c` が `config/read` と新規 thread の既定に反映されるか、Codex Plan Mode の復元で
-  effort が thread settings に残るか、opencode 対話 TUI で effort を起動時に渡す手段の
-  有無。codex の resume 語順は #362 ではなく #363 の PR 内で確認する。
+
+### #362 実機検証(2026-10-04)
+
+Claude Code 2.1.287(native binary)、Codex CLI 0.155.1、OpenCode 1.18.31 で確認した。
+専用 cwd に新規作成した所有 session だけを再開し、ユーザー設定は直接編集していない。
+結果はこの版と検証時の設定に限定する。調査記録は [#362](https://github.com/butaosuinu/fanout/issues/362)。
+
+1. continue の model / effort 再指定。Claude は `--model sonnet --effort low` で
+   作った会話を `--continue --model opus --effort medium` で再開すると、同じ履歴で
+   `Opus 5.5 / medium` と表示した。同じ所有 ID を `--resume <id> --model opus --effort medium
+   --print --output-format stream-json --verbose` で再開した実応答も `claude-opus-5-5` だった。
+   OpenCode は `--model opencode-go/glm-5.3-flash --continue` を受理しても、保存済みの
+   `opencode-go/kimi-k3 / max` に戻り、次の実応答も Kimi だった(`opencode export <id>` で確認)。
+   固定版の [履歴復元処理](https://github.com/anomalyco/opencode/blob/014614d35b397775e5d397a490fc72368c894ec2/packages/tui/src/component/prompt/index.tsx#L311-L330)
+   も最後の user message の model / variant を再設定する。#363 の再注入だけで OpenCode の
+   履歴モデルを上書きできるとは保証しない。Codex の resume 語順は引き続き #363 の検証範囲。
+2. 不正値と起動成功。下表の `w1-362-invalid` は存在しない値。終了コードはユーザー操作で
+   終了した結果と区別する。
+
+   | CLI / 入力 | 観測 |
+   |---|---|
+   | Claude `--model w1-362-invalid --effort low` | 起動後、実 turn で不存在・アクセス不可を通知。TUI は継続。 |
+   | Claude `--model sonnet --effort w1-362-invalid` | 不正 effort を無視して既定値を使う警告。TUI は継続。 |
+   | Codex `--model w1-362-invalid` / `-c model_reasoning_effort=w1-362-invalid` | 両方とも起動し、実 turn で HTTP 400。エラー表示後も TUI は継続。 |
+   | OpenCode `--model w1-362-invalid/model` | 不正モデルの通知後も TUI は継続し、`opencode-go/kimi-k3 / max` で実応答。 |
+   | OpenCode `--variant high` | 通常 TUI にはフラグがなく、help を表示して exit 1。 |
+
+   fanout 側はコード確認による推論: tmux の `splitPane` は pane 作成と ID、Herdr の
+   `matchManagedAgentProcess` は process / argv identity を確認する。provider が指定値を
+   受理した証明にはならない。特に tmux wrapper は agent が即終了しても shell を残す。
+   #363 の形式検証・非対応 effort の事前拒否と、CLI / provider の値検証を混同しない。
+   fanout 自体で不正値の子 pane を作る live 検証は行っていない。
+3. app-server の `-c`。`codex app-server -c model=gpt-6-luna
+   -c model_reasoning_effort=low` で `config/read` と model 無指定の `thread/start` は
+   luna / low を返し、実 turn も完了した(astra / low も確認)。#791 の team lane の既定反映を
+   支持する。一方、`plan_mode_reasoning_effort` は既存設定の xhigh のままなので、Plan lane の
+   明示上書きは別に必要。不正 model / effort も設定読取と thread 作成では受理される。
+   `config/read` の値だけでは有効なモデル・effort での実行成功を証明できない。
+4. Plan effort の復元。`thread/settings/update` と `turn/start` の
+   `collaborationMode.settings` に `model=gpt-6-astra` / `reasoning_effort=medium` を設定して
+   turn を完了した。app-server を終了し、既定 low の別プロセスで `thread/resume {threadId}`
+   を送っても応答は medium。さらに、fanout と同じ `app-server --listen ws://127.0.0.1:<port>`
+   と `codex --remote <address> resume <owned-id>` の経路でも medium と同じ履歴を確認した。
+   #791 では、この版・完了済み turn の effort 保持を前提にできる。fanout の controller 全体、
+   旧版、turn 未実行時の保持までは検証していない。
+5. OpenCode 通常 TUI の variant。1.18.31 の help と
+   [TUI の引数定義](https://github.com/anomalyco/opencode/blob/014614d35b397775e5d397a490fc72368c894ec2/packages/opencode/src/cli/cmd/tui.ts)
+   に直接指定するフラグはなく、上表のとおり `--variant` は拒否された。`opencode run --variant`
+   は別の入口。保存済み variant の復元や設定経由の選択と、fanout が行うプロセスごとの argv
+   注入は区別し、通常 TUI への effort 指定を事前拒否する方針を維持する。
 
 ## 実装分解
 
