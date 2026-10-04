@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/table"
 
@@ -123,7 +124,7 @@ func (p paneView) tableRow() table.Row {
 		dash(p.backendLabel()),
 		tmuxState,
 		dash(p.IssueState),
-		truncate(dash(p.PRSummary), 16),
+		prCell(dash(p.PRSummary), 16),
 		truncate(dash(p.CIStatus), 7),
 		dash(p.DiffSummary),
 		dash(p.DirtyState),
@@ -310,6 +311,9 @@ func issueTitle(status issueStatus, num int) string {
 	return "#" + strconv.Itoa(num)
 }
 
+// stackTagSep starts the stack tag summarizePRs appends; prCell cuts before it.
+const stackTagSep = " ⧉ "
+
 // summarizePRs is the PR column: the primary pull request and, when it sits in
 // a GitHub-native stack, its layer as the web dashboard's tag shows it.
 func summarizePRs(prs []ghissue.PRRef) string {
@@ -319,9 +323,21 @@ func summarizePRs(prs []ghissue.PRRef) string {
 	}
 	summary := "#" + strconv.Itoa(pr.Number) + " " + dash(pr.DisplayState())
 	if s := pr.Stack; s != nil {
-		summary += fmt.Sprintf(" ⧉ %d/%d", s.Position, s.Size)
+		summary += fmt.Sprintf("%s%d/%d", stackTagSep, s.Position, s.Size)
 	}
 	return summary
+}
+
+// prCell fits the PR summary into the column without cutting the stack tag.
+// The state gives way first: the detail panel repeats the whole summary, and
+// only this column shows the layer at a glance.
+func prCell(summary string, width int) string {
+	head, pos, ok := strings.Cut(summary, stackTagSep)
+	if !ok {
+		return truncate(summary, width)
+	}
+	tag := stackTagSep + pos
+	return truncate(head, width-utf8.RuneCountInString(tag)) + tag
 }
 
 func (p paneView) itemLabel() string {

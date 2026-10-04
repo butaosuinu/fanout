@@ -1,5 +1,5 @@
 import { useLingui } from "@lingui/react/macro";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import type { PaneView, PRRef } from "../../transport/types";
 import { PrPill } from "../sessions/badges";
 import { paneLabel, paneName } from "../sessions/pane";
@@ -85,16 +85,18 @@ function StackLayerRow({
       <PrPill repo={repo} pr={layer.pr} />
       {layer.owners.length > 0 && (
         <span className="muted">
-          {layer.owners.map((o) => (
-            <button
-              key={`${o.paneId}:${paneLabel(o)}:${o.slug}`}
-              type="button"
-              className="diff-link"
-              title={t`この行の詳細を開く`}
-              onClick={() => selectOwner(o)}
-            >
-              {paneName(o) || paneLabel(o)}
-            </button>
+          {layer.owners.map((o, i) => (
+            <Fragment key={`${o.paneId}:${paneLabel(o)}:${o.slug}`}>
+              {i > 0 && ", "}
+              <button
+                type="button"
+                className="diff-link"
+                title={t`この行の詳細を開く`}
+                onClick={() => selectOwner(o)}
+              >
+                {paneName(o) || paneLabel(o)}
+              </button>
+            </Fragment>
           ))}
         </span>
       )}
