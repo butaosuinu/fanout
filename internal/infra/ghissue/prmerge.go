@@ -108,6 +108,9 @@ type PRTarget struct {
 	BaseRef string
 	HeadRef string
 	HeadSha string
+	// DefaultBranch is the repository's default branch, the trunk a stack is
+	// built on and never a layer of one.
+	DefaultBranch string
 	// ClosesIssues is the set of issues this pull request currently closes. An
 	// issue row owns a PR through that link and nothing else, and the link can be
 	// edited away without moving a single commit.
@@ -138,6 +141,7 @@ type ClosingIssue struct {
 const prStateQuery = `
 query($owner:String!,$name:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$name){
+    defaultBranchRef { name }
     pullRequest(number:$number){
       state
       mergedAt
@@ -233,6 +237,9 @@ func parsePRState(out []byte) (_ PRTarget, more bool, cursor string, err error) 
 	var payload struct {
 		Data struct {
 			Repository struct {
+				DefaultBranchRef *struct {
+					Name string `json:"name"`
+				} `json:"defaultBranchRef"`
 				PullRequest *prStateNode `json:"pullRequest"`
 			} `json:"repository"`
 		} `json:"data"`
@@ -244,14 +251,19 @@ func parsePRState(out []byte) (_ PRTarget, more bool, cursor string, err error) 
 	if pr == nil {
 		return PRTarget{}, false, "", errors.New("pull request not found in response")
 	}
+	var trunk string
+	if ref := payload.Data.Repository.DefaultBranchRef; ref != nil {
+		trunk = ref.Name
+	}
 	return PRTarget{
-		Merged:       strings.EqualFold(pr.State, "MERGED") || pr.MergedAt != nil,
-		AutoMerge:    pr.AutoMerge != nil,
-		Queued:       pr.MergeQueueEntry != nil,
-		BaseRef:      pr.BaseRefName,
-		HeadRef:      pr.HeadRefName,
-		HeadSha:      pr.HeadRefOid,
-		ClosesIssues: closingIssues(pr.ClosingIssues.Nodes),
+		DefaultBranch: trunk,
+		Merged:        strings.EqualFold(pr.State, "MERGED") || pr.MergedAt != nil,
+		AutoMerge:     pr.AutoMerge != nil,
+		Queued:        pr.MergeQueueEntry != nil,
+		BaseRef:       pr.BaseRefName,
+		HeadRef:       pr.HeadRefName,
+		HeadSha:       pr.HeadRefOid,
+		ClosesIssues:  closingIssues(pr.ClosingIssues.Nodes),
 	}, pr.ClosingIssues.PageInfo.HasNextPage, pr.ClosingIssues.PageInfo.EndCursor, nil
 }
 
@@ -389,6 +401,58 @@ func openHeadNumbers(out []byte, owner, repo, branch string) ([]int, error) {
 func sameRepo(row headPRRow, owner, repo string) bool {
 	return strings.EqualFold(row.HeadOwner.Login, owner) &&
 		strings.EqualFold(row.HeadRepo.Name, repo)
+}
+
+// OpenPRNumbersForBase lists the OPEN pull requests in this repository whose
+// base is this branch, a fork's included: its base is still this repository's
+// branch. Every listed row counts, so neither a looser gh match nor a list cut
+// off at the limit can read as "nothing is based here".
+func (r Runner) OpenPRNumbersForBase(ctx context.Context, owner, repo, branch string) (_ []int, err error) {
+	defer errs.Wrap(&err, "list open pull requests based on %q", branch)
+
+	out, err := r.ghContext(ctx, "pr", "list", "-R", owner+"/"+repo,
+		"--base", branch, "--state", "open",
+		"--limit", strconv.Itoa(openHeadListLimit),
+		"--json", "number")
+	if err != nil {
+		return nil, err
+	}
+	return prNumbers(out)
+}
+
+// OpenPRNumbersFromBranch lists the OPEN pull requests in this repository that
+// this repository's own branch heads — the layer below, when the branch is
+// another pull request's base. It is not OpenPRNumbersForHead: the branch here
+// is usually the trunk, and `gh pr list --head main` also returns every fork's
+// pull request from a branch named main (58 in microsoft/vscode, 2026-10-04),
+// enough to hit the list limit and refuse every merge. The REST head filter
+// takes owner:branch, which leaves forks out, so one row answers.
+func (r Runner) OpenPRNumbersFromBranch(ctx context.Context, owner, repo, branch string) (_ []int, err error) {
+	defer errs.Wrap(&err, "list open pull requests from %q", branch)
+
+	out, err := r.ghContext(ctx, "api", "--method", "GET",
+		fmt.Sprintf("repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo)),
+		"-f", "state=open", "-f", "head="+owner+":"+branch, "-f", "per_page=1")
+	if err != nil {
+		return nil, err
+	}
+	return prNumbers(out)
+}
+
+// prNumbers reads the numbers out of a JSON array of pull requests, the shape
+// both `gh pr list --json number` and the REST pulls list print.
+func prNumbers(out []byte) ([]int, error) {
+	var rows []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, err
+	}
+	nums := make([]int, 0, len(rows))
+	for _, row := range rows {
+		nums = append(nums, row.Number)
+	}
+	return nums, nil
 }
 
 // BranchOID reads a branch's current commit. "" means the ref is already gone.

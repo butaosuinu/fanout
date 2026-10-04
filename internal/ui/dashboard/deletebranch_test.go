@@ -206,6 +206,7 @@ func TestDeleteBranchSurfacesItsOwnRefusals(t *testing.T) {
 	}{
 		{name: "not merged yet", err: prmerge.ErrNotMerged, code: "not_merged"},
 		{name: "another open PR still uses the branch", err: prmerge.ErrBranchInUse, code: "branch_in_use"},
+		{name: "an open PR is based on the branch", err: prmerge.ErrBranchIsBase, code: "branch_is_base"},
 		{name: "the head moved after the click", err: prmerge.ErrStaleHead, code: "stale_head"},
 	}
 	for _, tt := range tests {

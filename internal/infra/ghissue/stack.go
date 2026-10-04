@@ -1,21 +1,25 @@
 package ghissue
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"strconv"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/core/errs"
 )
 
 // PRStack is a pull request's place in a GitHub-native stacked pull request
 // (public preview since 2026-07): layer Position of Size, counted from the
 // layer closest to BaseRef.
 //
-// It is display only. Merge, branch delete, the merge-hold release, and every
-// derived row field read the row's own PRRefs and never look inside Entries:
-// the entry copies are slim and fetched at a different time from the row's.
+// The snapshot's copy is display only. Merge, branch delete, the merge-hold
+// release, and every derived row field read the row's own PRRefs and never
+// look inside its Entries: the entry copies are slim and fetched at a different
+// time from the row's. The merge fence reads its own live copy (Runner.PRStack).
 type PRStack struct {
 	Number   int            `json:"number"`
 	Size     int            `json:"size"`
@@ -31,20 +35,18 @@ type PRStackEntry struct {
 	PR       PRRef `json:"pr"`
 }
 
-// prStackFields reads one pull request's stack. It stays out of
-// prRefNodeFields on purpose: the stack schema is a preview, and a rename there
-// would fail every PR read the TUI and the CLI merge gates share. Here a failure
-// only hides the stack maps.
-//
-// ponytail: 20 layers per stack; a taller one shows its true size in the
-// heading but draws only the first 20. Page entries if stacks get that tall.
-const prStackFields = ` {
+// prStackFields reads one pull request's stack, entries layers of it. It stays
+// out of prRefNodeFields on purpose: the stack schema is a preview, and a rename
+// there would fail every PR read the TUI and the CLI merge gates share. Here a
+// failure only hides the stack maps, or refuses the merge PRStack fences.
+func prStackFields(entries int) string {
+	return ` {
       stackEntry { position }
       stack {
         number
         size
         baseRefName
-        entries(first: 20) {
+        entries(first: ` + strconv.Itoa(entries) + `) {
           nodes {
             position
             pullRequest { number state mergedAt isDraft reviewDecision headRefName }
@@ -52,12 +54,23 @@ const prStackFields = ` {
         }
       }
     }`
+}
 
-func prStacksQuery(nums []int) string {
+// The maps draw 20 layers; a taller stack shows its true size in the heading
+// but draws only the first 20. The merge fence reads up to GitHub's page size,
+// so every layer below position 101 is seen.
+//
+// ponytail: one page of entries each; page them if stacks get that tall.
+const (
+	stackMapEntries   = 20
+	stackFenceEntries = 100
+)
+
+func prStacksQuery(nums []int, entries int) string {
 	fields := make([]string, 0, len(nums))
 	for _, num := range nums {
 		n := strconv.Itoa(num)
-		fields = append(fields, "    pr_"+n+": pullRequest(number: "+n+")"+prStackFields)
+		fields = append(fields, "    pr_"+n+": pullRequest(number: "+n+")"+prStackFields(entries))
 	}
 	return `query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
@@ -79,7 +92,7 @@ func (r Runner) PRStacks(owner, repo string, nums []int) (map[int]*PRStack, erro
 			"api", "graphql",
 			"-f", "owner="+owner,
 			"-f", "repo="+repo,
-			"-f", "query="+prStacksQuery(chunk),
+			"-f", "query="+prStacksQuery(chunk, stackMapEntries),
 		)
 		// gh exits non-zero whenever the response carries any GraphQL error, yet
 		// still prints it. Read what came back, so one unresolvable pull request
@@ -95,6 +108,63 @@ func (r Runner) PRStacks(owner, repo string, nums []int) (map[int]*PRStack, erro
 		maps.Copy(stacks, parsed)
 	}
 	return stacks, loadErr
+}
+
+// PRStack reads one pull request's stack as GitHub reports it now, bound to
+// ctx so a handler deadline kills gh. nil means the pull request is in no
+// stack. Unlike PRStacks it keeps no partial answer: the merge fence refuses on
+// any error rather than guess which layers it could not see.
+//
+// The one error read as "no stack" is a schema without the fields. A server
+// whose schema has no stack (a GitHub Enterprise Server without the preview,
+// say) has no native stacks, and refusing there would stop every merge. A renamed preview reads the same
+// way; a mid-stack layer then still heads its base from the layer below, which
+// the merge's chain fence refuses on stable fields.
+func (r Runner) PRStack(ctx context.Context, owner, repo string, number int) (_ *PRStack, err error) {
+	defer errs.Wrap(&err, "read stack of pull request #%d", number)
+
+	out, err := r.ghContext(ctx,
+		"api", "graphql",
+		"-f", "owner="+owner,
+		"-f", "repo="+repo,
+		"-f", "query="+prStacksQuery([]int{number}, stackFenceEntries),
+	)
+	if err != nil {
+		if noStackSchema(out) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	stacks, err := parsePRStacks(out, []int{number})
+	if err != nil {
+		return nil, err
+	}
+	stack, ok := stacks[number]
+	if !ok {
+		return nil, errors.New("pull request not found in response")
+	}
+	return stack, nil
+}
+
+// noStackSchema reports a response whose every error is an undefined field:
+// the schema, not this pull request, lacks what the query asked for.
+func noStackSchema(out []byte) bool {
+	var root struct {
+		Errors []struct {
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(out, &root) != nil || len(root.Errors) == 0 {
+		return false
+	}
+	for _, e := range root.Errors {
+		if e.Extensions.Code != "undefinedField" {
+			return false
+		}
+	}
+	return true
 }
 
 type prStackNode struct {

@@ -227,11 +227,15 @@ PR が紐付いている Session には**マージ**ボタンが出ます。置�
 
 マージが終わると、詳細ドロワーの PR の隣に**ブランチを削除**ボタンが現れます。GitHub 自身の "Delete branch" と同じ扱いです。消えるのは GitHub 側の branch だけで、worktree とローカル branch はそのまま残ります(それらは従来どおり `--cleanup` の担当)。fork の branch と、マージ後に動いた branch は対象外です。ただし GitHub API に条件付きの ref 削除が無いため、削除直前の確認と削除リクエストの間に push されたコミットまでは守れません。
 
-マージが成立しない状態ではボタンが理由付きで無効になります。PR が無い、すでにマージ済み、close 済み、draft のまま、base branch と競合している、の 5 つです。
+マージが成立しない状態ではボタンが理由付きで無効になります。PR が無い、すでにマージ済み、close 済み、draft のまま、base branch と競合している、stack の下の層がまだマージされていない、の 6 つです。
 CI の失敗やレビュー未承認では無効になりません。それらがマージを止めるかどうかは branch protection の設定次第なので、ボタンは押せるままにしてメニューに警告を出します。
 GitHub が拒否した場合はその旨をエラーで表示し、PR は変わりません。
 
-マージとブランチ削除のボタンは stack を考慮しません。GitHub では、ある層をマージするとその下の未マージの層もまとめてマージされます。stack は下の層から順にマージしてください。
+stack は下の層から順にマージします。GitHub の native stack では、ある層をマージするとその下の未マージの層もまとめてマージされます。手で積んだ PR は trunk ではなく下の層の branch へマージされます。
+そのため、下の層が未マージの間はボタンが無効になります。対象は GitHub native stack の下の層と、この PR の base を head に持つこの repository の open PR です。サーバはマージ前に GitHub で同じ条件を確かめ、ダッシュボードのどの行にも無い下の層も見ます。
+default branch は層として数えません。それ以外の長寿命 branch は層と同じに見えます。`develop` → `main` の release PR が open の間は、`develop` への PR もマージを待ちます。
+
+**ブランチを削除**も、この repository の open PR がその branch を base にしている間は拒否します。手で積んだ stack の次の層です。GitHub の UI から branch を消すと、GitHub はその PR の base を付け替えます。API からの削除でも同じかは未確認で、付け替わらなければ GitHub はその PR を close します。
 
 ダッシュボードは描画時に見ていた PR 番号と head commit を送り、サーバはその commit を `--match-head-commit` として GitHub に渡します。
 ページを開いてからクリックするまでの間に push された PR は、そのままマージされるのではなく拒否されます。

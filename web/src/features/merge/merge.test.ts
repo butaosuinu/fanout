@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { makePane, makePr, makeQueuedPane } from "../../test/fixtures";
 import { diffQuery, rowQuery } from "../sessions/pane";
-import { canDeleteBranch, mergeBlockReason, mergeTargetPr, mergeWarnings } from "./merge";
+import type { PRStack } from "../../transport/types";
+import {
+  canDeleteBranch,
+  layerBelow,
+  mergeBlockReason,
+  mergeTargetPr,
+  mergeWarnings,
+} from "./merge";
 
 const OK = { githubDegraded: false, pending: false, tokenless: false };
 
@@ -66,6 +73,83 @@ describe("mergeBlockReason", () => {
     expect(mergeBlockReason(makePr({ reviewDecision: "REVIEW_REQUIRED" }), OK)).toBeNull();
     expect(mergeBlockReason(makePr({ reviewDecision: "CHANGES_REQUESTED" }), OK)).toBeNull();
     expect(mergeBlockReason(makePr({ ci: "fail" }), OK)).toBeNull();
+  });
+
+  it("下の層が未マージなら、PR 自体の理由の後に塞ぐ", () => {
+    expect(mergeBlockReason(makePr(), { ...OK, below: 700 })?.values).toEqual({ pr: 700 });
+    expect(mergeBlockReason(makePr({ isDraft: true }), { ...OK, below: 700 })?.message).toBe(
+      mergeBlockReason(makePr({ isDraft: true }), OK)?.message,
+    );
+  });
+});
+
+/* サーバの fenceChain / fenceNativeStack と同じ条件を snapshot で評価する。 */
+describe("layerBelow", () => {
+  const REPO = "octo/fanout";
+
+  describe("native stack", () => {
+    const stack = (position: number, lowerState: string, entries = true): PRStack => ({
+      number: 9,
+      size: 3,
+      baseRef: "main",
+      position,
+      entries: entries
+        ? [
+            { position: 1, pr: { number: 700, state: lowerState, mergedAt: null } },
+            { position: 2, pr: { number: 701, state: "OPEN", mergedAt: null } },
+          ]
+        : undefined,
+    });
+
+    it("下の層が未マージならその番号", () => {
+      expect(layerBelow(makePr({ stack: stack(2, "OPEN") }), [], REPO)).toBe(700);
+    });
+
+    it("下の層が close 済みでも未マージとして数える", () => {
+      expect(layerBelow(makePr({ stack: stack(2, "CLOSED") }), [], REPO)).toBe(700);
+    });
+
+    it("下の層がすべてマージ済みなら null", () => {
+      expect(layerBelow(makePr({ stack: stack(2, "MERGED") }), [], REPO)).toBeNull();
+    });
+
+    it("最下層は上に未マージ層があっても null", () => {
+      expect(layerBelow(makePr({ number: 700, stack: stack(1, "OPEN") }), [], REPO)).toBeNull();
+    });
+
+    /* entries が無いと下の層は分からない。サーバの live 判定に任せる。 */
+    it("entries が無ければ null", () => {
+      expect(layerBelow(makePr({ stack: stack(2, "OPEN", false) }), [], REPO)).toBeNull();
+    });
+  });
+
+  describe("手で積んだ連鎖", () => {
+    const upper = makePr({ number: 701, baseRef: "fanout/lower" });
+
+    it("base を head に持つ open PR があればその番号", () => {
+      const lower = makePr({ number: 700, headRef: "fanout/lower" });
+      expect(layerBelow(upper, [lower, upper], REPO)).toBe(700);
+    });
+
+    /* 連鎖の推定(直線のみ)とは違い、分岐や同じ head の複数 PR でも塞ぐ。サーバも
+     * 「base を head に持つ open PR があるか」しか見ない。 */
+    it("base を head に持つ open PR が複数あっても塞ぐ", () => {
+      const lowers = [700, 702].map((number) => makePr({ number, headRef: "fanout/lower" }));
+      expect(layerBelow(upper, lowers, REPO)).toBe(700);
+    });
+
+    it("マージ済みや close 済みの PR は下の層に数えない", () => {
+      const lowers = [
+        makePr({ number: 700, headRef: "fanout/lower", state: "MERGED" }),
+        makePr({ number: 702, headRef: "fanout/lower", state: "CLOSED" }),
+      ];
+      expect(layerBelow(upper, lowers, REPO)).toBeNull();
+    });
+
+    it("fork の同名 branch は下の層に数えない", () => {
+      const fork = makePr({ number: 700, headRef: "fanout/lower", headRepo: "stranger/fanout" });
+      expect(layerBelow(upper, [fork], REPO)).toBeNull();
+    });
   });
 });
 

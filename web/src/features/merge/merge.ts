@@ -2,6 +2,7 @@ import type { MessageDescriptor } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
 import { errorBody } from "../../transport/api";
 import type { PRRef } from "../../transport/types";
+import { sameRepo } from "../sessions/stack";
 import type { MergeMethod } from "../settings/useSettings";
 
 /* サーバ契約の唯一の接点。エンドポイントと body の形が変わるならここだけを
@@ -41,6 +42,31 @@ function isMerged(pr: PRRef): boolean {
 
 function isOpen(pr: PRRef): boolean {
   return !isMerged(pr) && prState(pr) !== "CLOSED";
+}
+
+/* この PR より下にある未マージの層の番号。無ければ null。サーバの fenceChain /
+ * fenceNativeStack と同じ条件を snapshot で評価する: native stack は entries の
+ * 未マージ層、手で積んだ連鎖は「この PR の base を head に持つ、この repository の
+ * open PR」。others は snapshot にあるこの repository の PR。どの行にも載らない
+ * 下の層はここでは見えず、サーバの live 読み取りが 409 で返す。
+ *
+ * サーバは base が default branch なら連鎖を見ない(trunk から出た同期 PR で main
+ * へのマージが止まらないように)。snapshot は default branch を持たないが、行の
+ * branch が trunk になることは無いので、trunk を head に持つ PR はここに来ない。 */
+export function layerBelow(pr: PRRef, others: readonly PRRef[], repo: string): number | null {
+  return nativeLayerBelow(pr) ?? chainLayerBelow(pr, others, repo);
+}
+
+function nativeLayerBelow(pr: PRRef): number | null {
+  const stack = pr.stack;
+  const hit = stack?.entries?.find((e) => e.position < stack.position && !isMerged(e.pr));
+  return hit?.pr.number ?? null;
+}
+
+function chainLayerBelow(pr: PRRef, others: readonly PRRef[], repo: string): number | null {
+  if (!pr.baseRef) return null;
+  const below = (o: PRRef) => isOpen(o) && o.headRef === pr.baseRef && sameRepo(o.headRepo, repo);
+  return others.find(below)?.number ?? null;
 }
 
 /* サーバの Preflight を通る見込みがあるか。行に複数 open PR があるとき、先頭が
@@ -97,7 +123,9 @@ const PR_BLOCKS: { when: (pr: PRRef) => boolean; reason: MessageDescriptor }[] =
 /* 押せない理由。押せるなら null。 */
 export function mergeBlockReason(
   pr: PRRef | null,
-  opts: { githubDegraded: boolean; pending: boolean; tokenless: boolean },
+  /* below は layerBelow の答え。途中層をマージすると、native stack では GitHub が
+   * 下の層ごとマージし、手で積んだ連鎖では trunk ではなく下の層の branch へ入る。 */
+  opts: { githubDegraded: boolean; pending: boolean; tokenless: boolean; below?: number | null },
 ): MessageDescriptor | null {
   if (opts.pending) return msg`マージを送信しました。GitHub への反映を待っています`;
   if (!pr) return msg`マージ対象の PR がありません`;
@@ -105,7 +133,11 @@ export function mergeBlockReason(
    * 押せない理由をここで見せる。 */
   if (opts.tokenless) return msg`--no-token で起動したダッシュボードではマージできません`;
   if (opts.githubDegraded) return msg`GitHub の情報を取得できていません`;
-  return PR_BLOCKS.find((b) => b.when(pr))?.reason ?? null;
+  const intrinsic = PR_BLOCKS.find((b) => b.when(pr))?.reason;
+  if (intrinsic) return intrinsic;
+  if (opts.below)
+    return msg`下の層 #${{ pr: opts.below }} が未マージです(下の層からマージしてください)`;
+  return null;
 }
 
 /* 押せるが、押す前に知っておくべき状態。

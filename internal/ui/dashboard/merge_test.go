@@ -1033,6 +1033,10 @@ func TestMergeErrorMapping(t *testing.T) {
 			name: "someone else merged it first", err: prmerge.ErrAlreadyMerged,
 			status: http.StatusConflict, code: "already_merged",
 		},
+		{
+			name: "a stack layer below is still open", err: prmerge.ErrStackBelow,
+			status: http.StatusConflict, code: "stack_below_unmerged",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

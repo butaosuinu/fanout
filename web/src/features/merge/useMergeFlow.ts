@@ -1,14 +1,15 @@
 import type { MessageDescriptor } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import type { PaneView, PRRef, Snapshot } from "../../transport/types";
 import { useMergePr, type MergeState } from "../../transport/useMergePr";
 import type { MergeMethod } from "../settings/useSettings";
 import { rowKey, rowQuery } from "../sessions/pane";
+import { indexPrs } from "../sessions/stack";
 import { useMergeTracking, type MergeTracking, type Notice, type Row } from "./useMergeRelease";
 import { usePinnedHead, type DiffSource } from "./usePinnedHead";
 import type { DiffFacts } from "../diff/useDiffReport";
-import { mergeBlockReason, mergeTargetPr, mergeWarnings } from "./merge";
+import { layerBelow, mergeBlockReason, mergeTargetPr, mergeWarnings } from "./merge";
 
 /* 1 行ぶんのマージボタンの状態。Drawer と diff ツールバーが同じものを受け取る。 */
 export interface MergeAffordance {
@@ -46,6 +47,12 @@ export function useMergeFlow(
   /* 送信結果の追跡(どの行が反映待ちか・どの PR が結果不明か)は 1 か所に持つ。 */
   const track = useMergeTracking(snap);
   const pinDiffHead = usePinnedHead(diff.key);
+  /* 下の層の判定に使う、snapshot 全体のこの repository の PR。下の層は別の行が
+   * 持つことがあるので、行のコピーからは引けない。 */
+  const repoPrs = useMemo(
+    () => [...indexPrs(snap, snap?.repo ?? "").values()].map((hit) => hit.pr),
+    [snap],
+  );
 
   const run = useCallback(
     (target: Target) => (method: MergeMethod) => {
@@ -74,6 +81,7 @@ export function useMergeFlow(
         key,
         buildAffordance({
           pr,
+          below: layerBelow(pr, repoPrs, repo),
           githubDegraded: snap?.degraded?.github === true,
           tokenless: token === "",
           pendingHere: heldBack({ key, prNumber: pr.number, repo }, track),
@@ -83,7 +91,7 @@ export function useMergeFlow(
         diffSource(pane, repo, diff.facts),
       );
     },
-    [snap, track, run, state, token, pinDiffHead, diff.facts],
+    [snap, repoPrs, track, run, state, token, pinDiffHead, diff.facts],
   );
 
   return { affordanceFor };
@@ -139,6 +147,7 @@ function diffSource(pane: PaneView, repo: string, facts: DiffFacts): DiffSource 
 
 function buildAffordance(input: {
   pr: PRRef;
+  below: number | null;
   githubDegraded: boolean;
   tokenless: boolean;
   pendingHere: boolean;
@@ -151,6 +160,7 @@ function buildAffordance(input: {
     githubDegraded: input.githubDegraded,
     tokenless: input.tokenless,
     pending: input.pendingHere,
+    below: input.below,
   });
   return {
     ...prIdentity(input.pr),

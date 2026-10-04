@@ -281,6 +281,22 @@ describe("無効化", () => {
     { name: "closed", pr: { state: "CLOSED" }, reason: /close 済み/ },
     { name: "draft", pr: { isDraft: true }, reason: /draft PR/ },
     { name: "conflicting", pr: { mergeable: "CONFLICTING" }, reason: /競合しています/ },
+    {
+      name: "stack の下の層が未マージ",
+      pr: {
+        stack: {
+          number: 9,
+          size: 2,
+          baseRef: "main",
+          position: 2,
+          entries: [
+            { position: 1, pr: { number: 700, state: "OPEN", mergedAt: null } },
+            { position: 2, pr: { number: 701, state: "OPEN", mergedAt: null } },
+          ],
+        },
+      },
+      reason: /下の層 #700 が未マージ/,
+    },
   ];
 
   for (const c of blocked) {
@@ -338,6 +354,43 @@ describe("無効化", () => {
     expect(within(drawer).getByRole("button", { name: "#701 をマージ" })).not.toHaveAttribute(
       "aria-disabled",
     );
+  });
+
+  /* 手で積んだ連鎖の途中層は、trunk ではなく下の層の branch へ入る。下の層は別の
+   * 行が持つので、行のコピーではなく snapshot 全体から引く。 */
+  it("base を head に持つ open PR が別の行にあれば塞ぐ", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            prs: [makePr({ headRef: "fanout/fix-login", baseRef: "fanout/lower" })],
+          }),
+          makePane({
+            issueNum: 100,
+            displayName: "Lower layer",
+            slug: "lower",
+            paneId: "%2",
+            branchName: "fanout/lower",
+            prs: [makePr({ number: 700, headRef: "fanout/lower" })],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    const button = within(drawer).getByRole("button", { name: /下の層 #700 が未マージ/ });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    await user.click(button);
+    expect(calls).toHaveLength(0);
   });
 
   /* branch protection の内容は wire に無いので、押せるままにして警告を出す。 */

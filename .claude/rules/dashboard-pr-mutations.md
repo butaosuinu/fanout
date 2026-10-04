@@ -32,6 +32,10 @@ The invariants a local edit breaks most easily:
   `<git-common-dir>/fanout/merge-claims.json`, the endpoint's only local write.
 - The branch delete fences on the head SHA GitHub reports on the live read,
   never on the SHA the client named.
+- A stack layer waits for the layers below it: the merge is refused while a
+  layer below is unmerged (native stack, or an open PR heading this PR's base),
+  judged on live reads. The snapshot's `PRRef.Stack` only feeds the web's
+  disabled reason and never authorizes a mutation.
 - Two gaps are deliberate (the base check reads the local remote-tracking ref;
   the worktree is pinned by commit-and-clean only). Read why they are open
   before closing either.
