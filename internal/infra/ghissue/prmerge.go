@@ -426,21 +426,40 @@ func (r Runner) OpenPRNumbersForBase(ctx context.Context, owner, repo, branch st
 // is usually the trunk, and `gh pr list --head main` also returns every fork's
 // pull request from a branch named main (58 in microsoft/vscode, 2026-10-04),
 // enough to hit the list limit and refuse every merge. The REST head filter
-// takes owner:branch, which leaves forks out, so one row answers.
+// takes owner:branch, which leaves other owners' forks out; the head repository
+// is still compared, since the owner may hold another repository with the same
+// branch name.
 func (r Runner) OpenPRNumbersFromBranch(ctx context.Context, owner, repo, branch string) (_ []int, err error) {
 	defer errs.Wrap(&err, "list open pull requests from %q", branch)
 
 	out, err := r.ghContext(ctx, "api", "--method", "GET",
 		fmt.Sprintf("repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo)),
-		"-f", "state=open", "-f", "head="+owner+":"+branch, "-f", "per_page=1")
+		"-f", "state=open", "-f", "head="+owner+":"+branch,
+		"-f", "per_page="+strconv.Itoa(openHeadListLimit))
 	if err != nil {
 		return nil, err
 	}
-	return prNumbers(out)
+	var rows []struct {
+		Number int `json:"number"`
+		Head   struct {
+			Repo *struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, err
+	}
+	var nums []int
+	for _, row := range rows {
+		if row.Head.Repo != nil && strings.EqualFold(row.Head.Repo.FullName, owner+"/"+repo) {
+			nums = append(nums, row.Number)
+		}
+	}
+	return nums, nil
 }
 
-// prNumbers reads the numbers out of a JSON array of pull requests, the shape
-// both `gh pr list --json number` and the REST pulls list print.
+// prNumbers reads the numbers out of `gh pr list --json number`.
 func prNumbers(out []byte) ([]int, error) {
 	var rows []struct {
 		Number int `json:"number"`

@@ -737,7 +737,7 @@ func TestMergeRefusesAMidStackLayer(t *testing.T) {
 			wantErr: ErrStackBelow,
 		},
 		{
-			// entries stop at 20; a layer the read did not return is not merged.
+			// entries stop at one page; a layer the read did not return is not merged.
 			name:    "refuses when a layer below was not returned",
 			live:    fakePort{stack: stack(3, layer(2, 6, "MERGED"), layer(3, 7, "OPEN"))},
 			wantErr: ErrStackBelow,

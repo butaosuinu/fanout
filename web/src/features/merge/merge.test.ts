@@ -10,7 +10,7 @@ import {
   mergeWarnings,
 } from "./merge";
 
-const OK = { githubDegraded: false, pending: false, tokenless: false };
+const OK = { githubDegraded: false, pending: false, tokenless: false, below: null };
 
 describe("mergeBlockReason", () => {
   it("PR が無い行は塞ぐ", () => {

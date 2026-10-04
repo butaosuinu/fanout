@@ -51,8 +51,9 @@ function isOpen(pr: PRRef): boolean {
  * 下の層はここでは見えず、サーバの live 読み取りが 409 で返す。
  *
  * サーバは base が default branch なら連鎖を見ない(trunk から出た同期 PR で main
- * へのマージが止まらないように)。snapshot は default branch を持たないが、行の
- * branch が trunk になることは無いので、trunk を head に持つ PR はここに来ない。 */
+ * へのマージが止まらないように)。snapshot は default branch を持たないので、ここは
+ * 見分けられない。issue 行が closing-issue link で trunk を head に持つ open PR を
+ * 載せていると、web はサーバより広く塞ぐ(押せないだけで、誤ってマージはしない)。 */
 export function layerBelow(pr: PRRef, others: readonly PRRef[], repo: string): number | null {
   return nativeLayerBelow(pr) ?? chainLayerBelow(pr, others, repo);
 }
@@ -125,7 +126,7 @@ export function mergeBlockReason(
   pr: PRRef | null,
   /* below は layerBelow の答え。途中層をマージすると、native stack では GitHub が
    * 下の層ごとマージし、手で積んだ連鎖では trunk ではなく下の層の branch へ入る。 */
-  opts: { githubDegraded: boolean; pending: boolean; tokenless: boolean; below?: number | null },
+  opts: { githubDegraded: boolean; pending: boolean; tokenless: boolean; below: number | null },
 ): MessageDescriptor | null {
   if (opts.pending) return msg`マージを送信しました。GitHub への反映を待っています`;
   if (!pr) return msg`マージ対象の PR がありません`;

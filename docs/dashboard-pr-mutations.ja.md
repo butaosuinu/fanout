@@ -181,9 +181,9 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
   release PR が open の間は、`develop` へのマージが止まる。GitHub 上で stack の層と区別
   できないため。
 - web は同じ述語を snapshot で評価し、理由付きで無効化する。どの行にも載らない下の層は
-  web から見えず、サーバの live 読み取りが 409 で返す。snapshot は default branch を持た
-  ないが、行の branch が trunk になることは無いので、trunk を head に持つ PR は web の
-  判定に入らない。
+  web から見えず、サーバの live 読み取りが 409 で返す。逆に snapshot は default branch を
+  持たないので、issue 行が closing-issue link で trunk を head に持つ open PR を載せて
+  いると、web はサーバより広く塞ぐ。押せなくなるだけで、誤ってマージはしない。
 - 下の層がマージ済みでも branch が残っていれば、手積みの上の層の base はその branch の
   まま。そこでマージすると trunk には入らない。この状態は検査しない(長寿命 branch の
   マージ済み PR と区別できない)。base の付け替えは、下の層の branch 削除で GitHub が行う。

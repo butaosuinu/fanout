@@ -531,7 +531,11 @@ func TestOpenPRNumbersForBase(t *testing.T) {
 // TestOpenPRNumbersFromBranch pins the chain fence's query: the REST head
 // filter in owner:branch form, which leaves forks' same-named branches out.
 func TestOpenPRNumbersFromBranch(t *testing.T) {
-	argsPath := installFakeGH(t, `[{"number":6,"head":{"label":"o:fanout/lower"}}]`)
+	// The same owner can hold another repository with the same branch name;
+	// only this repository's branch is a layer here.
+	argsPath := installFakeGH(t, `[{"number":6,"head":{"label":"o:fanout/lower","repo":{"full_name":"O/R"}}},`+
+		`{"number":8,"head":{"label":"o:fanout/lower","repo":{"full_name":"o/r-mirror"}}},`+
+		`{"number":9,"head":{"label":"o:fanout/lower","repo":null}}]`)
 	got, err := (Runner{}).OpenPRNumbersFromBranch(context.Background(), "o", "r", "fanout/lower")
 	if err != nil {
 		t.Fatal(err)
