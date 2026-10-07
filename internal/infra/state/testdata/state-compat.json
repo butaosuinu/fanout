@@ -64,6 +64,8 @@
       "sourceIssueNum": 530,
       "sourceTaskId": "task-herdr-0",
       "agent": "codex",
+      "model": "gpt-6-astra",
+      "effort": "medium",
       "codexPlanMode": true,
       "codexThreadId": "thread-531",
       "codexSessionId": "session-531",

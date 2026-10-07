@@ -64,15 +64,36 @@ func TestAdmitStandaloneIssueRuntimeDefersBackendForRecordedIssue(t *testing.T) 
 	}}
 	err := admitStandaloneIssueRuntime(t.TempDir(), &cliflags.Config{ParentRef: "425"}, rt, state.Store{
 		Panes: []state.Pane{{Parent: panelaunch.WatchParentRef, IssueNum: 425}},
-	}, 425)
+	}, 425, false)
 	if !errors.Is(err, watch.ErrAlreadyFanned) || prepareCalls != 0 {
 		t.Fatalf("admit recorded issue = %v, prepare calls %d; want already-fanned without ownership", err, prepareCalls)
 	}
 	err = admitStandaloneIssueRuntime(t.TempDir(), &cliflags.Config{
 		ParentRef: "425", Agent: "unknown", DryRun: true,
-	}, rt, state.Store{}, 425)
+	}, rt, state.Store{}, 425, false)
 	if err == nil || !strings.Contains(err.Error(), "unknown agent") || prepareCalls != 0 {
 		t.Fatalf("admit invalid agent = %v, prepare calls %d; want validation before ownership", err, prepareCalls)
+	}
+	err = admitStandaloneIssueRuntime(t.TempDir(), &cliflags.Config{
+		ParentRef: "425", Agent: "codex", Model: "gpt-6-astra", DryRun: true,
+	}, rt, state.Store{}, 425, true)
+	if err == nil || !strings.Contains(err.Error(), "#791") || prepareCalls != 0 {
+		t.Fatalf("admit unsupported selection = %v, prepare calls %d; want rejection before ownership", err, prepareCalls)
+	}
+}
+
+func TestWatcherSelectionPreservesEnvironmentModelEffort(t *testing.T) {
+	t.Setenv("FANOUT_AGENT", "codex:gpt-6-astra:medium")
+	resolved := settings.Defaults()
+	resolved.WatcherAgent = ""
+	cfg := newWatchLaunchConfig(resolved, 123, 2)
+	if got := cfg.EffectiveSelection("").String(); got != "codex:gpt-6-astra:medium" {
+		t.Fatalf("watcher selection = %q", got)
+	}
+	resolved.WatcherAgent = "claude"
+	cfg = newWatchLaunchConfig(resolved, 123, 2)
+	if got := cfg.EffectiveSelection("").String(); got != "claude" {
+		t.Fatalf("explicit watcher agent inherited another agent's selection: %q", got)
 	}
 }
 
@@ -219,7 +240,10 @@ func TestTUIIssueAndProjectHerdrLaunchFailuresDoNotPersistPanes(t *testing.T) {
 		{
 			name: "standalone issue",
 			launch: func(repo string) error {
-				cfg := tuiIssueLaunchConfig(425, "claude", nil)
+				cfg, cfgErr := tuiIssueLaunchConfig(425, "claude", nil)
+				if cfgErr != nil {
+					t.Fatal(cfgErr)
+				}
 				_, err := launchStandaloneIssuePaneWithResult(repo, "fanout-test", "fanout", cfg, settings.Defaults(), hooks.EmptyConfig(), ghissue.Issue{Number: 425, Title: "standalone"})
 				return err
 			},
@@ -227,7 +251,10 @@ func TestTUIIssueAndProjectHerdrLaunchFailuresDoNotPersistPanes(t *testing.T) {
 		{
 			name: "parent issue",
 			launch: func(repo string) error {
-				cfg := tuiIssueLaunchConfig(425, "claude", nil)
+				cfg, cfgErr := tuiIssueLaunchConfig(425, "claude", nil)
+				if cfgErr != nil {
+					t.Fatal(cfgErr)
+				}
 				_, err := launchParentIssueFanoutWithResult(repo, "fanout-test", "fanout", cfg, nil)
 				return err
 			},

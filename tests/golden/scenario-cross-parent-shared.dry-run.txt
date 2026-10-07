@@ -5,6 +5,7 @@
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #501: Shared child
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/briefings/fanout-project_root-501.md
   slug -> shared-child-parent-200-501
   worktree -> <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/shared-child-parent-200-501
@@ -29,6 +30,7 @@
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #501: dry-run complete
 [info] #502: B-only child
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/briefings/fanout-project_root-502.md
   slug -> b-only-child-502
   worktree -> <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/b-only-child-502

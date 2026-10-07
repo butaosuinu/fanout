@@ -64,6 +64,8 @@ type Request struct {
 	SourceIssueNum      int
 	SourceTaskID        string
 	Agent               string
+	Model               string
+	Effort              string
 	AgentCommand        string
 	LaunchMode          agent.LaunchMode
 	CodexPlanStatusPath string
@@ -95,6 +97,26 @@ func (r Request) PlanMode() bool {
 // controller rather than an ordinary mode-aware agent command.
 func (r Request) CodexPlanMode() bool {
 	return r.PlanMode() && r.Agent == "codex"
+}
+
+func (r Request) Selection() agent.Selection {
+	return agent.Selection{Name: r.Agent, Model: r.Model, Effort: r.Effort}
+}
+
+func (r *Request) setSelection(selection agent.Selection) {
+	r.Agent, r.Model, r.Effort = selection.Name, selection.Model, selection.Effort
+}
+
+// ValidateSelection rejects overrides that the app-server lanes cannot yet
+// forward. Call before creating a pane, including for dry runs.
+func ValidateSelection(selection agent.Selection, planMode, teamMode bool) error {
+	if err := selection.Validate(); err != nil {
+		return err
+	}
+	if selection.Name == "codex" && (planMode || teamMode) && (selection.Model != "" || selection.Effort != "") {
+		return fmt.Errorf("codexapp lane does not support model / effort selection yet (#791)")
+	}
+	return nil
 }
 
 // Result identifies the runtime pane created by a successful launch. PaneID is
@@ -141,6 +163,10 @@ func (l *Launcher) LaunchOK(req Request) bool {
 // LaunchWithResult creates one worktree-backed agent pane and returns its exact
 // backend-native pane id. A successful dry run returns an empty Result.
 func (l *Launcher) LaunchWithResult(req Request) (Result, bool) {
+	if err := ValidateSelection(req.Selection(), req.PlanMode(), req.CodexTeamRequested || req.CodexTeamMode); err != nil {
+		l.Log.Err("%s: %v", paneLogLabel(req), err)
+		return Result{}, false
+	}
 	if l.Backend != nil && l.Backend.MutationModel() == backend.MutationJournaled {
 		return l.launchManaged(req)
 	}
@@ -337,6 +363,10 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 }
 
 func (l *Launcher) prepareAttachedLaunch(req *Request) (*state.LockedStore, bool) {
+	if err := ValidateSelection(req.Selection(), req.PlanMode(), req.CodexTeamRequested || req.CodexTeamMode); err != nil {
+		l.Log.Err("%s: %v", paneLogLabel(*req), err)
+		return nil, false
+	}
 	if err := prepareAttachedLiveness(l.Backend.MutationModel(), req); err != nil {
 		l.Log.Err("%s: %v", paneLogLabel(*req), err)
 		return nil, false
@@ -558,6 +588,7 @@ func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time
 		SourceIssueNum: req.SourceIssueNum,
 		SourceTaskID:   req.SourceTaskID,
 		Agent:          req.Agent,
+		Model:          req.Model, Effort: req.Effort,
 		ShellKey:       req.ShellKey,
 		PlanMode:       req.PlanMode(),
 		CodexThreadID:  codexTUIStatus.ThreadID,
@@ -684,6 +715,9 @@ func compareVersion(left, right [3]int) int {
 // builds the command for that runtime. The runtime name is data handed to the
 // core command builder, never a branch here.
 func buildAgentCommandForBackend(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
+	if err := ValidateSelection(req.Selection(), req.PlanMode(), req.CodexTeamRequested || req.CodexTeamMode); err != nil {
+		return "", err
+	}
 	return buildAgentCommandForRuntime(cfg, req, commandName, backend.NormalizeName(runtimeBackend))
 }
 
@@ -729,13 +763,13 @@ func buildAgentCommandForRuntime(cfg *cliflags.Config, req Request, commandName 
 		return agent.WithFanoutBin(command, fanoutPath), nil
 	}
 	if cfg.DryRun {
-		command, err := agent.BuildCommandForBackendWithMode(req.Agent, req.Prompt, runtimeBackend, req.LaunchMode)
+		command, err := agent.BuildSelectionCommandForBackendWithMode(req.Selection(), req.Prompt, runtimeBackend, req.LaunchMode)
 		if err != nil {
 			return "", err
 		}
 		return command, nil
 	}
-	command, err := agent.BuildResolvedCommandForBackendWithMode(req.Agent, req.Prompt, runtimeBackend, req.LaunchMode)
+	command, err := agent.BuildResolvedSelectionCommandForBackendWithMode(req.Selection(), req.Prompt, runtimeBackend, req.LaunchMode)
 	if err != nil {
 		return "", err
 	}
@@ -818,6 +852,7 @@ func (l *Launcher) releaseStartGateAfterFailure(req Request) {
 
 func logPaneRequest(req Request, lg *log.Logger) {
 	lg.Info("%s: %s", paneLogLabel(req), req.ShortTitle)
+	lg.Dim("  agent -> %s", req.Selection().String())
 	if req.BriefingPath != "" {
 		lg.Dim("  briefing -> %s", req.BriefingPath)
 	}

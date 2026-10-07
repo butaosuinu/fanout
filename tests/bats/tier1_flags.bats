@@ -20,6 +20,57 @@
 
 load helpers
 
+@test "agent model and effort syntax rejects unsupported effort and extra fields" {
+  use_fixture scenario-sub-issue-only
+  for selection in '101=opencode:x:high' 'claude:a:b:c' 'unknown:model'; do
+    run_fanout 100 --agent "$selection" --dry-run --sleep 0
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"tmux split-window"* ]]
+  done
+  run_fanout 100 --agent '101=opencode:x:high' --dry-run
+  [[ "$output" == *"does not support effort"* ]]
+  run_fanout plan missing.json --agent 'task=claude:a:b:c' --dry-run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"expected name[:model[:effort]]"* ]]
+}
+
+@test "codex model selection rejects Plan and team lanes before pane creation" {
+  use_fixture scenario-sub-issue-only
+  export FANOUT_CHILD_PLAN_MODE=true
+  run_fanout 100 --agent 'codex:gpt-6-astra:medium' --dry-run --sleep 0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"#791"* ]]
+  [[ "$output" != *"tmux split-window"* ]]
+  export FANOUT_CHILD_PLAN_MODE=false
+  run_fanout 100 --agent 'codex::medium' --team --dry-run --sleep 0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"#791"* ]]
+  [[ "$output" != *"tmux split-window"* ]]
+}
+
+@test "plan tasks reject codexapp selections before pane creation" {
+  use_fixture scenario-plan-basic
+  export FANOUT_CHILD_PLAN_MODE=true
+  run_fanout plan "$FIXTURE_DIR/plan.json" --agent 'codex:gpt-6-astra:medium' --dry-run --sleep 0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"#791"* ]]
+  [[ "$output" != *"tmux split-window"* ]]
+  export FANOUT_CHILD_PLAN_MODE=false
+  run_fanout plan "$FIXTURE_DIR/plan.json" --agent 'codex::medium' --team --dry-run --sleep 0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"#791"* ]]
+  [[ "$output" != *"tmux split-window"* ]]
+}
+
+@test "FANOUT_AGENT accepts model and effort with matching target inheritance" {
+  use_fixture scenario-sub-issue-only
+  export FANOUT_AGENT='codex:gpt-6-astra:medium'
+  run_fanout 100 --agent '101=codex::high' --dry-run --sleep 0
+  assert_success
+  [[ "$output" == *"agent -> codex:gpt-6-astra:high"* ]]
+  [[ "$output" == *"agent -> codex:gpt-6-astra:medium"* ]]
+}
+
 @test "prepare-dev-cache rejects symlinks and makes owned caches private" {
   local cache="$BATS_TEST_TMPDIR/dev-cache"
   local cache_link="$BATS_TEST_TMPDIR/dev-cache-link"

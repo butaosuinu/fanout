@@ -188,7 +188,7 @@ func (m model) assignOverrides() map[string]string {
 		if overrides == nil {
 			overrides = map[string]string{}
 		}
-		overrides[row.target] = launchAgents[clampInt(row.agentIdx, 0, len(launchAgents)-1)]
+		overrides[row.target] = m.newPaneAgentSelection(launchAgents[clampInt(row.agentIdx, 0, len(launchAgents)-1)])
 	}
 	return overrides
 }
@@ -233,7 +233,7 @@ func (m *model) finalizeIssuePlanSubmit() tea.Cmd {
 		Issue:        m.newPane.selIssue,
 		PlanFanout:   true,
 		DefaultAgent: m.selectedDefaultAgent(),
-		WorkerAgent:  launchAgents[clampInt(m.newPane.workerIndex, 0, len(launchAgents)-1)],
+		WorkerAgent:  m.newPaneAgentSelection(launchAgents[clampInt(m.newPane.workerIndex, 0, len(launchAgents)-1)]),
 	}
 	if !m.promptOnly && m.opts.LaunchIssuePlan == nil {
 		m.newPane.err = "issue plan launcher is not configured"

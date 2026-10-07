@@ -142,8 +142,8 @@ func TestResumeRestartedManagedRowsRebindsExactCodexProcess(t *testing.T) {
 		got.EmitterRebindNonce != "" || got.EmitterRebindSequence != 0 {
 		t.Fatalf("rebound telemetry = (%q, %t, %q)", got.ReportedState, got.StateRefinement, got.EmitterNonce)
 	}
-	wantArgs := []string{"resume", saved.AgentSession.Value}
-	if !slices.Equal(got.LaunchArgs, wantArgs) || runtime.issueCalls != 1 ||
+	wantArgs := []string{"--model", "gpt-6-astra", "-c", "model_reasoning_effort=medium", "resume", saved.AgentSession.Value}
+	if got.Model != saved.Model || got.Effort != saved.Effort || !slices.Equal(got.LaunchArgs, wantArgs) || runtime.issueCalls != 1 ||
 		runtime.waitCalls != 1 || runtime.waitTimeout != 3*time.Second {
 		t.Fatalf("resume result args=%q issues=%d wait=%d/%s", got.LaunchArgs, runtime.issueCalls, runtime.waitCalls, runtime.waitTimeout)
 	}
@@ -204,11 +204,14 @@ func TestExactManagedResumeRouteCleansObservedResourcePaths(t *testing.T) {
 	pane.CurrentPath = "/repo/worktree/."
 	pane.RepoKey = "/repo/worktree/../.git"
 	pane.ProjectRoot = "/repo/."
-	intent := newManagedResumeIntent(
-		"resume", "nonce", "/env", 1,
+	intent, err := newManagedResumeIntent(
+		"resume", "nonce",
 		managedRestartCandidate{row: managedRestartRow{saved: saved}, live: pane},
 		time.Now().Add(time.Minute),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if intent.Resource.CurrentPath != "/repo/worktree" || intent.Resource.RepoKey != "/repo/.git" ||
 		intent.Resource.RepoRoot != "/repo" {
 		t.Fatalf("saved resume resource paths = %+v", intent.Resource)
@@ -434,11 +437,15 @@ func TestResumeRestartedManagedRowsDoesNotReplayInterruptedIntent(t *testing.T) 
 	candidate := managedRestartCandidate{
 		row: managedRestartRow{root: repo, current: true, saved: saved}, live: placeholder,
 	}
-	intent := newManagedResumeIntent(
+	intent, err := newManagedResumeIntent(
 		mustManagedResumeID(t, saved), strings.Repeat("a", 32),
-		mustResumeEnvironment(t, runtime.route.RuntimeDir, strings.Repeat("a", 32)),
-		1, candidate, time.Now().Add(time.Minute),
+		candidate, time.Now().Add(time.Minute),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.Launch.EnvFilePath = mustResumeEnvironment(t, runtime.route.RuntimeDir, strings.Repeat("a", 32))
+	intent.Launch.EnvNameCount = 1
 	intent.Launch.LauncherReady, intent.Launch.TokenIssued = true, true
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
@@ -537,7 +544,7 @@ func newRestartRuntimeFake(
 		resumedPanes: []backend.LivePane{resumed},
 		launcherInfo: restartProcessInfo(launcher, nil, saved.WorktreePath),
 		resumedInfo: restartProcessInfo(
-			saved.LaunchExecutable, []string{"resume", saved.AgentSession.Value}, saved.WorktreePath,
+			saved.LaunchExecutable, []string{"--model", saved.Model, "-c", "model_reasoning_effort=" + saved.Effort, "resume", saved.AgentSession.Value}, saved.WorktreePath,
 		),
 	}
 }
@@ -584,7 +591,8 @@ func restartCodexFixture() (state.Pane, backend.LivePane) {
 		AgentID: "fanout-codex", AgentSession: ref,
 		ProcessIdentity: &backend.ProcessIdentity{ShellPID: 10, ForegroundProcessGroup: 10, AgentPID: 10},
 		SessionID:       "fanout-owned", SocketPath: "/runtime/herdr.sock",
-		LaunchExecutable: "/opt/codex", LaunchArgs: []string{"prompt"},
+		Model: "gpt-6-astra", Effort: "medium",
+		LaunchExecutable: "/opt/codex", LaunchArgs: []string{"--model", "gpt-6-astra", "-c", "model_reasoning_effort=medium", "prompt"},
 		DirectAgentLaunch: true, Agent: "codex", WorktreePath: "/repo/worktree",
 		ReportedState: "working", StateRefinement: true, EmitterNonce: strings.Repeat("b", 32),
 	}

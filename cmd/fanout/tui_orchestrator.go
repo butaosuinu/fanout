@@ -51,6 +51,10 @@ func guardLinkedIssueOrchestrator(projectRoot string, current state.Store, issue
 // caller's locked recorder keeps the orchestrator row and child rows in one
 // launch transaction.
 func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, backend.PaneBinding, bool, string, error) {
+	selection, err := agent.ParseSelection(agentName)
+	if err != nil {
+		return panelaunch.Request{}, "", backend.PaneBinding{}, false, "", err
+	}
 	var fallbackNotice string
 	req, paneID, binding, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, managed, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
 		func(store state.Store) error {
@@ -58,7 +62,7 @@ func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, r
 		},
 		func(store state.Store, livenessKey string) panelaunch.Request {
 			var req panelaunch.Request
-			req, fallbackNotice = newIssueOrchestratorPaneRequest(projectRoot, store, hookConfig, issue, agentName, orchestratorPlanMode, livenessKey)
+			req, fallbackNotice = newIssueOrchestratorPaneRequest(projectRoot, store, hookConfig, issue, selection, orchestratorPlanMode, livenessKey)
 			return req
 		})
 	if errors.Is(err, errIssueOrchestratorRecorded) {
@@ -78,7 +82,7 @@ func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, r
 
 // newIssueOrchestratorPaneRequest mirrors an issue-plan coordinator request,
 // but its one-line prompt starts parent coordination instead of plan fan-out.
-func newIssueOrchestratorPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool, livenessKey string) (panelaunch.Request, string) {
+func newIssueOrchestratorPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, selection agent.Selection, orchestratorPlanMode bool, livenessKey string) (panelaunch.Request, string) {
 	number := panelaunch.NextManagedSyntheticPaneNumber(projectRoot, store, panelaunch.ManualParentRef)
 	title := fmt.Sprintf("orchestrator: #%d %s", issue.Number, issue.Title)
 	briefingPath := orchestratorIssueBriefingPath(projectRoot, issue.Number, number)
@@ -95,13 +99,14 @@ func newIssueOrchestratorPaneRequest(projectRoot string, store state.Store, hook
 		Slug:                panelaunch.OrchestratorIssueSlug(issue.Number, number),
 		DisplayNameOverride: title,
 		Prompt:              fmt.Sprintf("orchestrate fanout for #%d. read %s and begin.", issue.Number, briefingPath),
-		Agent:               agentName,
-		LaunchMode:          launchMode,
-		ShellKey:            livenessKey,
-		AgentStartGate:      "fanout-orchestrator-start-" + livenessKey,
-		Hooks:               hookConfig,
-		BriefingPath:        briefingPath,
-		BriefingBody:        briefing.RenderIssueOrchestrator(issue.Number, issue.Title, issue.Body),
+		Agent:               selection.Name,
+		Model:               selection.Model, Effort: selection.Effort,
+		LaunchMode:     launchMode,
+		ShellKey:       livenessKey,
+		AgentStartGate: "fanout-orchestrator-start-" + livenessKey,
+		Hooks:          hookConfig,
+		BriefingPath:   briefingPath,
+		BriefingBody:   briefing.RenderIssueOrchestrator(issue.Number, issue.Title, issue.Body),
 	}
 	if req.CodexPlanMode() && req.AgentStartGate != "" {
 		req.LaunchMode = agent.ModeBuild

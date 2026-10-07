@@ -41,7 +41,6 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 	slug := naming.Slug(issue.Title, issue.Number)
 	slugOverridden := false
 	branchOverride := ""
-	agentName := cfg.EffectiveAgentForIssue(issue.Number)
 	req := Request{
 		ParentRef:    cfg.ParentRef,
 		Number:       issue.Number,
@@ -51,10 +50,10 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 		BriefingPath: briefing.Path(projectRoot, issue.Number),
 		ShortTitle:   ShortIssueTitle(issue.Title),
 		Slug:         slug,
-		Agent:        agentName,
 		LaunchMode:   issueLaunchMode(cfg),
 		Hooks:        hookConfig,
 	}
+	req.setSelection(cfg.EffectiveSelection(strconv.Itoa(issue.Number)))
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
 			req.Slug = naming.EnsureIssueSuffix(name.SlugHint, issue.Number)
@@ -74,7 +73,7 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 		BaseBranch:  cfg.BaseBranch,
 		NoRefresh:   cfg.NoRefresh,
 	})
-	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, agentName, req.Worktree.BaseBranch, resolvedSettings, req.PlanMode(), teamCtx)
+	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, req.Agent, req.Worktree.BaseBranch, resolvedSettings, req.PlanMode(), teamCtx)
 	req.Prompt = oneLinePrompt(req.ParentRef, req)
 	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, issue.Number, cfg.DryRun)
@@ -100,7 +99,6 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 	if branchName == "" {
 		branchName = naming.BranchName("", cfg.BranchPrefix, slug)
 	}
-	agentName := cfg.EffectiveAgent(task.ID)
 	req := Request{
 		ParentRef:           PlanParentRef(spec.Plan.Slug),
 		Number:              0,
@@ -113,7 +111,6 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 		Slug:                slug,
 		DisplayNameOverride: task.DisplayName,
 		BranchName:          branchName,
-		Agent:               agentName,
 		LaunchMode:          childLaunchMode(resolvedSettings.ChildPlanMode),
 		Hooks:               hookConfig,
 		Worktree: worktree.BuildPlan(worktree.Options{
@@ -125,7 +122,8 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 			AllowMissingOrigin: true,
 		}),
 	}
-	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings, req.PlanMode(), teamCtx)
+	req.setSelection(cfg.EffectiveSelection(task.ID))
+	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, req.Agent, req.Worktree.BaseBranch, resolvedSettings, req.PlanMode(), teamCtx)
 	req.Prompt = taskOneLinePrompt(spec.Plan.Slug, req)
 	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.TaskStatusPath(projectRoot, spec.Plan.Slug, task.ID, cfg.DryRun)
@@ -158,10 +156,8 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 		title = "Manual agent"
 	}
 	number, slug, branchName := freeManualPaneIdentity(cfg, projectRoot, store, title)
-	agentName := opts.Agent
-	if agentName == "" {
-		agentName = cfg.Agent
-	}
+	selection := agent.ResolveSelection(agent.Selection{Name: opts.Agent}, cfg.EffectiveSelection(""))
+	agentName := selection.Name
 	prompt := opts.Prompt
 	if prompt == "" {
 		prompt = title
@@ -188,15 +184,16 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 		prompt = manualPromptWithBriefing(prompt, briefingPath)
 	}
 	req := Request{
-		ParentRef:    ManualParentRef,
-		Number:       number,
-		Title:        title,
-		Body:         opts.Body,
-		ShortTitle:   ShortIssueTitle(title),
-		Slug:         slug,
-		BranchName:   branchName,
-		Prompt:       prompt,
-		Agent:        agentName,
+		ParentRef:  ManualParentRef,
+		Number:     number,
+		Title:      title,
+		Body:       opts.Body,
+		ShortTitle: ShortIssueTitle(title),
+		Slug:       slug,
+		BranchName: branchName,
+		Prompt:     prompt,
+		Agent:      agentName,
+		Model:      selection.Model, Effort: selection.Effort,
 		Hooks:        hookConfig,
 		BriefingPath: briefingPath,
 		BriefingBody: briefingBody,
@@ -280,7 +277,8 @@ func buildAttachedRequest(
 	parentRef string,
 	number int,
 ) Request {
-	agentName := cfg.Agent
+	selection := cfg.EffectiveSelection("")
+	agentName := selection.Name
 	title := attachedPaneTitle(agentName, target.SourceLabel, targetPath)
 	slug := attachedPaneSlug(targetPath, agentName, number)
 	body := prompt
@@ -294,6 +292,7 @@ func buildAttachedRequest(
 		BranchName: strings.TrimSpace(target.SourceBranchName), Prompt: prompt,
 		SourceParent: parentRef, SourceIssueNum: target.SourceIssueNum,
 		SourceTaskID: strings.TrimSpace(target.SourceTaskID), Agent: agentName,
+		Model: selection.Model, Effort: selection.Effort,
 		Hooks: hookConfig, BriefingPath: briefingPath, BriefingBody: briefingBody,
 		LaunchMode: launchMode,
 	}
@@ -347,7 +346,7 @@ func attachedIntentMatchesRequest(intent state.LaunchIntent, req Request) bool {
 		return true
 	}
 	launch := intent.Launch
-	if launch.Agent != req.Agent {
+	if launch.Selection() != req.Selection() {
 		return false
 	}
 	if validateManagedTeamBinding(req, launch) != nil {

@@ -5,6 +5,7 @@
 [info] sub-issues: 3 total, 3 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 1
 [info] #701: Alpha
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/briefings/fanout-project_root-701.md
   slug -> alpha-701
   worktree -> <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/alpha-701
@@ -29,6 +30,7 @@
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #701: dry-run complete
 [info] #702: Bravo
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/briefings/fanout-project_root-702.md
   slug -> bravo-702
   worktree -> <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/bravo-702

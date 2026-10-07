@@ -8,6 +8,7 @@ filtered out:
   base-types Define base types - not in --only
 
 [info] api-client: Extract API client
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-plan-blocked/project_root/.fanout/briefings/fanout-project_root-launch%2Dplan-api%2Dclient.md
   slug -> launch-plan-extract-api-client-api-client
   worktree -> <REPO>/tests/fixtures/scenario-plan-blocked/project_root/.fanout/worktrees/launch-plan-extract-api-client-api-client

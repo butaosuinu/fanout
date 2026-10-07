@@ -468,24 +468,14 @@ func stopRestoredPane(rt restoreRuntime, paneID, shellKey string) error {
 }
 
 func restoreAgentCommand(pane state.Pane, root, commandName string) (string, string, error) {
-	if pane.PlanMode && pane.Agent == "codex" {
-		if strings.TrimSpace(pane.CodexThreadID) == "" {
-			return "", "", fmt.Errorf("cannot restore Codex Plan Mode pane %q: missing codex thread id", restorePaneTitle(pane))
-		}
-		codexPath, err := agent.ResolveExecutable("codex")
-		if err != nil {
-			return "", "", err
-		}
-		fanoutPath, err := os.Executable()
-		if err != nil || strings.TrimSpace(fanoutPath) == "" {
-			fanoutPath = commandName
-		}
-		statusPath := codexapp.StatusPath(root, pane.IssueNum, false)
-		command := "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " +
-			codexapp.ResumeLaunchCommand(fanoutPath, codexPath, pane.CodexThreadID, pane.CodexSessionID, statusPath)
-		return agent.WithFanoutBin(command, fanoutPath), statusPath, nil
+	selection := agent.Selection{Name: pane.Agent, Model: pane.Model, Effort: pane.Effort}
+	if err := panelaunch.ValidateSelection(selection, pane.PlanMode, false); err != nil {
+		return "", "", err
 	}
-	command, err := agent.BuildResolvedResumeCommand(pane.Agent)
+	if pane.PlanMode && pane.Agent == "codex" {
+		return restoreCodexPlanCommand(pane, root, commandName)
+	}
+	command, err := agent.BuildResolvedSelectionResumeCommandForBackend(selection, backend.NormalizeName(pane.Backend))
 	if err != nil {
 		return "", "", err
 	}
@@ -494,6 +484,24 @@ func restoreAgentCommand(pane state.Pane, root, commandName string) (string, str
 		fanoutPath = commandName
 	}
 	return agent.WithFanoutBin(command, fanoutPath), "", nil
+}
+
+func restoreCodexPlanCommand(pane state.Pane, root, commandName string) (string, string, error) {
+	if strings.TrimSpace(pane.CodexThreadID) == "" {
+		return "", "", fmt.Errorf("cannot restore Codex Plan Mode pane %q: missing codex thread id", restorePaneTitle(pane))
+	}
+	codexPath, err := agent.ResolveExecutable("codex")
+	if err != nil {
+		return "", "", err
+	}
+	fanoutPath, err := os.Executable()
+	if err != nil || strings.TrimSpace(fanoutPath) == "" {
+		fanoutPath = commandName
+	}
+	statusPath := codexapp.StatusPath(root, pane.IssueNum, false)
+	command := "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " +
+		codexapp.ResumeLaunchCommand(fanoutPath, codexPath, pane.CodexThreadID, pane.CodexSessionID, statusPath)
+	return agent.WithFanoutBin(command, fanoutPath), statusPath, nil
 }
 
 // restoreClaimants indexes, across every restore root's store, how many rows

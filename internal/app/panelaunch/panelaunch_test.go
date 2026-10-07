@@ -1127,6 +1127,48 @@ func TestNewIssueRequestUsesIssueAgentOverride(t *testing.T) {
 	}
 }
 
+func TestRequestSelectionPersistsThroughState(t *testing.T) {
+	root := t.TempDir()
+	cfg := &cliflags.Config{
+		ParentRef: "200", Agent: "codex", Model: "gpt-6-astra", Effort: "medium",
+		AgentOverrides: []cliflags.AgentOverride{
+			{Target: "501", Name: "codex", Effort: "high"},
+			{Target: "api-client", Name: "codex", Effort: "high"},
+		},
+	}
+	want := agent.Selection{Name: "codex", Model: "gpt-6-astra", Effort: "high"}
+	requests := []Request{
+		NewIssueRequest(cfg, root, ghissue.Issue{Number: 501, Title: "child"}, settings.Defaults(), hooks.EmptyConfig(), false, nil),
+		NewTaskRequest(cfg, root, planspec.Spec{Plan: planspec.Plan{Slug: "selection"}}, planspec.Task{ID: "api-client", Title: "task"}, settings.Defaults(), hooks.EmptyConfig(), nil),
+	}
+	locked, err := state.LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+	for _, req := range requests {
+		if req.Selection() != want {
+			t.Fatalf("request selection = %+v, want %+v", req.Selection(), want)
+		}
+		pane := statePane(req, "%10", root, time.Now(), codexapp.Status{})
+		if err = locked.RecordPane(pane); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded, err := state.LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != len(requests) {
+		t.Fatalf("saved %d panes, want %d", len(loaded.Panes), len(requests))
+	}
+	for _, pane := range loaded.Panes {
+		if pane.Agent != want.Name || pane.Model != want.Model || pane.Effort != want.Effort {
+			t.Fatalf("state lost selection: %+v", pane)
+		}
+	}
+}
+
 func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	cfg := &cliflags.Config{
 		ParentRef:    "220",
