@@ -6,6 +6,7 @@
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #201: First task
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-body-task-list/project_root/.fanout/briefings/fanout-project_root-201.md
   slug -> first-task-201
   worktree -> <REPO>/tests/fixtures/scenario-body-task-list/project_root/.fanout/worktrees/first-task-201
@@ -30,6 +31,7 @@
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #201: dry-run complete
 [info] #202: Second task
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-body-task-list/project_root/.fanout/briefings/fanout-project_root-202.md
   slug -> second-task-202
   worktree -> <REPO>/tests/fixtures/scenario-body-task-list/project_root/.fanout/worktrees/second-task-202

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -36,6 +37,8 @@ type Config struct {
 	ProjectNumber      int
 	ProjectStatus      string
 	Agent              string
+	Model              string
+	Effort             string
 	Backend            backend.Name
 	BaseBranch         string
 	BranchPrefix       string
@@ -99,6 +102,8 @@ func (c *Config) FindName(num int) *NameOverride {
 type AgentOverride struct {
 	Target string
 	Name   string
+	Model  string
+	Effort string
 }
 
 func (c *Config) FindAgent(target string) *AgentOverride {
@@ -111,10 +116,31 @@ func (c *Config) FindAgent(target string) *AgentOverride {
 }
 
 func (c *Config) EffectiveAgent(target string) string {
-	if agent := c.FindAgent(target); agent != nil {
-		return agent.Name
+	return c.EffectiveSelection(target).Name
+}
+
+// EffectiveSelection fills empty fields from the bare selection only when the
+// target selects the same agent.
+func (c *Config) EffectiveSelection(target string) agent.Selection {
+	base := agent.Selection{Name: c.Agent, Model: c.Model, Effort: c.Effort}
+	if override := c.FindAgent(target); override != nil {
+		return agent.ResolveSelection(override.Selection(), base)
 	}
-	return c.Agent
+	return base
+}
+
+func (a AgentOverride) Selection() agent.Selection {
+	return agent.Selection{Name: a.Name, Model: a.Model, Effort: a.Effort}
+}
+
+// SetAgent parses a bare flag or FANOUT_AGENT through the shared grammar.
+func (c *Config) SetAgent(raw string) error {
+	selection, err := agent.ParseSelection(raw)
+	if err != nil {
+		return err
+	}
+	c.Agent, c.Model, c.Effort = selection.Name, selection.Model, selection.Effort
+	return nil
 }
 
 func (c *Config) EffectiveAgentForIssue(num int) string {
@@ -122,13 +148,18 @@ func (c *Config) EffectiveAgentForIssue(num int) string {
 }
 
 func UpsertAgentOverride(overrides []AgentOverride, target, name string) []AgentOverride {
+	return UpsertSelectionOverride(overrides, target, agent.Selection{Name: name})
+}
+
+func UpsertSelectionOverride(overrides []AgentOverride, target string, selection agent.Selection) []AgentOverride {
+	entry := AgentOverride{Target: target, Name: selection.Name, Model: selection.Model, Effort: selection.Effort}
 	for i := range overrides {
 		if overrides[i].Target == target {
-			overrides[i].Name = name
+			overrides[i] = entry
 			return overrides
 		}
 	}
-	return append(overrides, AgentOverride{Target: target, Name: name})
+	return append(overrides, entry)
 }
 
 func (c *Config) HasAnyDisplayName() bool {
@@ -702,13 +733,10 @@ func parseNameArg(cfg *Config, raw string) error {
 }
 
 func parseAgentArg(cfg *Config, raw string) error {
-	if !strings.Contains(raw, "=") {
-		cfg.Agent = raw
-		return nil
+	target, name, override := strings.Cut(raw, "=")
+	if !override || strings.Contains(target, ":") {
+		return cfg.SetAgent(raw)
 	}
-	eq := strings.IndexByte(raw, '=')
-	target := raw[:eq]
-	name := raw[eq+1:]
 
 	if !reAllDigits.MatchString(target) {
 		return fmt.Errorf("--agent: <NUM> must be a positive integer, got: '%s'", target)
@@ -720,6 +748,10 @@ func parseAgentArg(cfg *Config, raw string) error {
 	if name == "" {
 		return fmt.Errorf("--agent #%d: agent name must not be empty", n)
 	}
-	cfg.AgentOverrides = UpsertAgentOverride(cfg.AgentOverrides, strconv.Itoa(n), name)
+	selection, err := agent.ParseSelection(name)
+	if err != nil {
+		return err
+	}
+	cfg.AgentOverrides = UpsertSelectionOverride(cfg.AgentOverrides, strconv.Itoa(n), selection)
 	return nil
 }

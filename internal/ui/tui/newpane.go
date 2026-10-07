@@ -40,11 +40,11 @@ type LaunchRequest struct {
 	// launching plain agent panes: the prompt in prompt mode, the selected
 	// issue in issue mode.
 	PlanFanout bool
-	// Agents holds the prompt-mode launch list (one pane per entry).
+	// Agents holds name[:model[:effort]] selections (one pane per entry).
 	Agents []string
 	// DefaultAgent and AgentOverrides carry the issue-mode agent selection.
 	// Overrides are keyed by child issue number ("123") and hold only rows that
-	// differ from DefaultAgent, mirroring repeatable --agent target=name flags.
+	// differ from DefaultAgent, mirroring --agent target=selection flags.
 	DefaultAgent   string
 	AgentOverrides map[string]string
 	// WorkerAgent is issue mode with PlanFanout only: the default agent the
@@ -167,6 +167,7 @@ type newPaneForm struct {
 	stagedPromptLines int
 	stagedPromptBytes int
 	agentCount        map[string]int
+	defaultSelection  agent.Selection
 	// promptAgentCount stashes the prompt-mode launch counts while a
 	// single-agent context (issue mode, plan fan-out) collapses agentCount to
 	// one selection; returning to plain prompt mode restores it. nil when
@@ -397,15 +398,17 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	)
 	prompt.Focus()
 
-	if agent.ValidateKnown(defaultAgent) != nil {
-		defaultAgent = defaultLaunchAgent
+	selection, err := agent.ParseSelection(defaultAgent)
+	if err != nil {
+		selection = agent.Selection{Name: defaultLaunchAgent}
 	}
 	return newPaneForm{
-		prompt:      prompt,
-		agentCount:  defaultAgentCounts(defaultAgent),
-		agentIndex:  defaultAgentIndex(defaultAgent),
-		workerIndex: defaultAgentIndex(defaultAgent),
-		focus:       newPaneFieldMain,
+		prompt:           prompt,
+		defaultSelection: selection,
+		agentCount:       defaultAgentCounts(selection.Name),
+		agentIndex:       defaultAgentIndex(selection.Name),
+		workerIndex:      defaultAgentIndex(selection.Name),
+		focus:            newPaneFieldMain,
 	}
 }
 
@@ -1272,21 +1275,25 @@ func defaultAgentCounts(defaultAgent string) map[string]int {
 }
 
 func defaultAgentIndex(defaultAgent string) int {
+	selection, err := agent.ParseSelection(defaultAgent)
+	if err != nil {
+		return 0
+	}
 	for i, agentName := range launchAgents {
-		if agentName == defaultAgent {
+		if agentName == selection.Name {
 			return i
 		}
 	}
 	return 0
 }
 
-// selectedDefaultAgent returns the single-agent selection's agent name: the one
+// selectedDefaultAgent returns the complete single-agent selection: the one
 // agent left at a non-zero count. The single-agent selector keeps the counts
 // summing to exactly one; the fallback to defaultLaunchAgent is defensive.
 func (m model) selectedDefaultAgent() string {
 	for _, agentName := range launchAgents {
 		if m.newPane.agentCount[agentName] > 0 {
-			return agentName
+			return m.newPaneAgentSelection(agentName)
 		}
 	}
 	return defaultLaunchAgent
@@ -1297,10 +1304,14 @@ func (m model) selectedNewPaneAgents() []string {
 	for _, agentName := range launchAgents {
 		count := clampInt(m.newPane.agentCount[agentName], 0, maxAgentLaunchCount)
 		for range count {
-			agents = append(agents, agentName)
+			agents = append(agents, m.newPaneAgentSelection(agentName))
 		}
 	}
 	return agents
+}
+
+func (m model) newPaneAgentSelection(name string) string {
+	return agent.ResolveSelection(agent.Selection{Name: name}, m.newPane.defaultSelection).String()
 }
 
 func (m model) formInputWidth() int {

@@ -9,6 +9,7 @@ filtered out:
   #602 Bravo — in --skip
 
 [info] #601: Alpha
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-skip/project_root/.fanout/briefings/fanout-project_root-601.md
   slug -> alpha-601
   worktree -> <REPO>/tests/fixtures/scenario-skip/project_root/.fanout/worktrees/alpha-601
@@ -33,6 +34,7 @@ filtered out:
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #601: dry-run complete
 [info] #603: Charlie
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-skip/project_root/.fanout/briefings/fanout-project_root-603.md
   slug -> charlie-603
   worktree -> <REPO>/tests/fixtures/scenario-skip/project_root/.fanout/worktrees/charlie-603

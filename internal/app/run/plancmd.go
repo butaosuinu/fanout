@@ -33,6 +33,8 @@ type PlanCommandConfig struct {
 	SpecArg            string
 	SpecPath           string
 	Agent              string
+	Model              string
+	Effort             string
 	Backend            backend.Name
 	AgentOverrides     []cliflags.AgentOverride
 	BaseBranch         string
@@ -168,7 +170,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 		}
 		return TaskExecutionResult{}, exitcode.OK
 	}
-	if !prepareTaskLaunch(cliCfg, plan, rt, lg) {
+	if !prepareTaskLaunch(cliCfg, resolvedSettings.ChildPlanMode, plan, rt, lg) {
 		return TaskExecutionResult{}, exitcode.Env
 	}
 	if code := copyLivePlanSpec(); code != exitcode.OK {
@@ -227,8 +229,10 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	return result, exitcode.OK
 }
 
-func prepareTaskLaunch(cfg *cliflags.Config, plan taskPlan, rt *Runtime, lg *log.Logger) bool {
-	if err := validateTaskAgents(cfg, plan.Targets, plan.LimitDeferred); err != nil {
+func prepareTaskLaunch(cfg *cliflags.Config, planMode bool, plan taskPlan, rt *Runtime, lg *log.Logger) bool {
+	launchCfg := *cfg
+	launchCfg.PlanMode = new(planMode)
+	if err := validateTaskAgents(&launchCfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
 		return false
 	}
@@ -248,6 +252,8 @@ func (cfg PlanCommandConfig) CLIConfig() *cliflags.Config {
 	return &cliflags.Config{
 		ParentRef:          planSubcommand,
 		Agent:              cfg.Agent,
+		Model:              cfg.Model,
+		Effort:             cfg.Effort,
 		Backend:            cfg.Backend,
 		AgentOverrides:     cfg.AgentOverrides,
 		BaseBranch:         cfg.BaseBranch,
@@ -593,7 +599,7 @@ func printTaskSummary(plan taskPlan, result TaskExecutionResult, cfg PlanCommand
 		boolFlag(" --team", cfg.Team),
 		settingsFlags(cliCfg),
 		worktreeFlags(cliCfg),
-		agentFlagsForTasks(cfg.Agent, cfg.AgentOverrides, plan.LimitDeferred),
+		agentFlagsForTasks(cliCfg.EffectiveSelection("").String(), cfg.AgentOverrides, plan.LimitDeferred),
 		optFlag("--backend", string(cfg.Backend)),
 		optFlag("--session", cfg.Session),
 		optFlag("--sleep", sleepFlagValue(cfg.SleepBetween)))

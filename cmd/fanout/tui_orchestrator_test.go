@@ -23,7 +23,7 @@ func TestNewIssueOrchestratorPaneRequest(t *testing.T) {
 		Title:  "Coordinate child changes",
 		Body:   "Keep the parent task list current.",
 	}
-	req, notice := newIssueOrchestratorPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, "codex", false, "shell-orchestrator-key")
+	req, notice := newIssueOrchestratorPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, agent.Selection{Name: "codex"}, false, "shell-orchestrator-key")
 
 	if req.Slug != "orchestrator-issue-500-1" {
 		t.Fatalf("req.Slug = %q, want orchestrator-issue-500-1", req.Slug)
@@ -92,7 +92,7 @@ func TestNewIssueOrchestratorPaneRequestLaunchMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req, notice := newIssueOrchestratorPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, tt.agentName, tt.planMode, "shell-orchestrator-key")
+			req, notice := newIssueOrchestratorPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, agent.Selection{Name: tt.agentName}, tt.planMode, "shell-orchestrator-key")
 			if req.AgentStartGate == "" {
 				t.Fatal("req.AgentStartGate is empty, want gated orchestrator launch")
 			}

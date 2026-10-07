@@ -6,6 +6,7 @@
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #401: Included child A
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-include/project_root/.fanout/briefings/fanout-project_root-401.md
   slug -> included-child-a-401
   worktree -> <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-a-401
@@ -30,6 +31,7 @@
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #401: dry-run complete
 [info] #402: Included child B
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-include/project_root/.fanout/briefings/fanout-project_root-402.md
   slug -> included-child-b-402
   worktree -> <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-b-402

@@ -369,7 +369,11 @@ func TestLaunchParentIssueFanoutRejectsPlanSession(t *testing.T) {
 	}
 	writeSavedPlanSpec(t, repo, "issue-123-add-search", "issue #123")
 
-	_, err = launchParentIssueFanout(repo, "fanout-test", "fanout", tuiIssueLaunchConfig(123, "claude", nil))
+	cfg, cfgErr := tuiIssueLaunchConfig(123, "claude", nil)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
+	_, err = launchParentIssueFanout(repo, "fanout-test", "fanout", cfg)
 	if err == nil || !strings.Contains(err.Error(), "issue #123 already has a plan session") {
 		t.Fatalf("launchParentIssueFanout() error = %v, want plan-session rejection", err)
 	}
@@ -437,7 +441,7 @@ esac
 }
 
 // TestLaunchIssuePlanFromTUIValidatesBeforeGH pins the fail-fast validation:
-// a bad issue number, an unknown agent name, or an uninstalled agent CLI must
+// a bad issue number, an invalid agent selection, or an uninstalled agent CLI must
 // be rejected before any gh call, so no gh binary is needed on PATH. The
 // worker is every task's default agent, so its missing CLI must fail here
 // instead of after the coordinator pane launched.
@@ -448,11 +452,14 @@ func TestLaunchIssuePlanFromTUIValidatesBeforeGH(t *testing.T) {
 		coordinator string
 		worker      string
 		installed   []string
+		childPlan   bool
 		wantErr     string
 	}{
 		{name: "rejects non-positive issue number", issueNum: 0, coordinator: "claude", worker: "codex", wantErr: "issue number is required"},
 		{name: "rejects unknown coordinator agent", issueNum: 7, coordinator: "bogus", worker: "codex", wantErr: `unknown agent "bogus"`},
 		{name: "rejects unknown worker agent", issueNum: 7, coordinator: "claude", worker: "bogus", wantErr: `unknown agent "bogus"`},
+		{name: "rejects codex worker model in child plan mode", issueNum: 7, coordinator: "claude", worker: "codex:gpt-6-astra:medium", installed: []string{"claude", "codex"}, childPlan: true, wantErr: "#791"},
+		{name: "rejects codex worker effort in child plan mode", issueNum: 7, coordinator: "claude", worker: "codex::medium", installed: []string{"claude", "codex"}, childPlan: true, wantErr: "#791"},
 		{name: "rejects uninstalled coordinator agent", issueNum: 7, coordinator: "claude", worker: "codex", installed: []string{"codex"}, wantErr: `agent "claude" is not installed`},
 		{name: "rejects uninstalled worker agent", issueNum: 7, coordinator: "claude", worker: "codex", installed: []string{"claude"}, wantErr: `agent "codex" is not installed`},
 	}
@@ -469,6 +476,7 @@ func TestLaunchIssuePlanFromTUIValidatesBeforeGH(t *testing.T) {
 				}
 			}
 			t.Setenv("PATH", binDir)
+			t.Setenv("FANOUT_CHILD_PLAN_MODE", fmt.Sprint(tt.childPlan))
 			_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), tt.issueNum, tt.coordinator, tt.worker)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("launchIssuePlanFromTUI() error = %v, want %q", err, tt.wantErr)

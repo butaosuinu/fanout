@@ -57,17 +57,13 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		return fanouttui.LaunchResult{}, fmt.Errorf("prompt is required")
 	}
 	agentNames := normalizeTUIAgents(req.Agents)
-	for _, agentName := range agentNames {
-		if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
-			return fanouttui.LaunchResult{}, validateErr
-		}
-		if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-			return fanouttui.LaunchResult{}, validateErr
-		}
-	}
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	cfg := newSessionConfigForTUIAgent(projectRoot, agentNames[0], launchLogger.Warn)
+	configs, err := newSessionConfigsForTUIAgents(projectRoot, agentNames, launchLogger.Warn)
+	if err != nil {
+		return fanouttui.LaunchResult{}, err
+	}
+	cfg := configs[0]
 	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
@@ -89,10 +85,9 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	if err := rt.PrepareLaunchBackend(); err != nil {
 		return fanouttui.LaunchResult{}, fmt.Errorf("runtime backend: %w", err)
 	}
-	createdPaneIDs := make([]string, 0, len(agentNames))
-	createdBindings := make([]backend.PaneBinding, 0, len(agentNames))
-	for _, agentName := range agentNames {
-		cfg = newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
+	createdPaneIDs := make([]string, 0, len(configs))
+	createdBindings := make([]backend.PaneBinding, 0, len(configs))
+	for _, cfg := range configs {
 		launchStore := store
 		if recorder != nil {
 			launchStore = recorder.Store
@@ -100,7 +95,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		launchStore = reclaimManagedSyntheticPaneNumber(
 			projectRoot, panelaunch.ManualParentRef, rt.Managed, recorder, launchStore,
 		)
-		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, launchStore, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
+		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, launchStore, hookConfig, manualPaneOptionsForTUI(prompt, cfg.Agent))
 		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if result, ok := launcher.LaunchWithResult(paneReq); ok {
 			if result.PaneID != "" {
@@ -167,13 +162,13 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 //
 //nolint:funlen // Coordinator validation, backend admission, and the one attach remain one lock-scoped transaction.
 func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, backend.PaneBinding, string, error) {
-	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
+	if validateErr := validateInstalledTUISelection(agentName); validateErr != nil {
 		return panelaunch.Request{}, "", backend.PaneBinding{}, "", validateErr
 	}
-	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-		return panelaunch.Request{}, "", backend.PaneBinding{}, "", validateErr
+	cfg, err := newSessionConfigForTUIAgent(projectRoot, agentName, nil)
+	if err != nil {
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", err
 	}
-	cfg := newSessionConfigForTUIAgent(projectRoot, agentName, nil)
 	cfg.ParentRef = parentRef
 	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
@@ -209,7 +204,10 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 // plan becomes ready, so it reuses that recorder instead of taking a nested
 // lock.
 func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, agentName, runtimeParent string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, backend.PaneBinding, string, error) {
-	cfg := &cliflags.Config{Agent: agentName, ParentRef: runtimeParent}
+	cfg := &cliflags.Config{ParentRef: runtimeParent}
+	if err := cfg.SetAgent(agentName); err != nil {
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", err
+	}
 	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, managed, cfg, store, recorder, guard,
 		func(store state.Store, livenessKey string, _ *cliflags.Config) panelaunch.Request {
 			return buildReq(store, livenessKey)
@@ -274,20 +272,8 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 	if issueNum <= 0 {
 		return fanouttui.LaunchResult{}, fmt.Errorf("issue number is required")
 	}
-	// Fail fast on both agents before any gh call. The worker is the default
-	// agent of every fanned-out task, so its install check runs up front like
-	// issue mode's default agent (validateTUIAgentSelection): failing later,
-	// when the coordinator runs `fanout plan --agent <worker>`, would leave a
-	// launched coordinator pane behind.
-	for _, name := range []string{coordinatorAgent, workerAgent} {
-		if validateErr := agent.ValidateKnown(name); validateErr != nil {
-			return fanouttui.LaunchResult{}, validateErr
-		}
-	}
-	for _, name := range []string{coordinatorAgent, workerAgent} {
-		if validateErr := agent.ValidateInstalled(name); validateErr != nil {
-			return fanouttui.LaunchResult{}, validateErr
-		}
+	if err := validateIssuePlanAgents(projectRoot, coordinatorAgent, workerAgent); err != nil {
+		return fanouttui.LaunchResult{}, err
 	}
 	detail, openChildren, err := fetchLaunchableIssue(projectRoot, issueNum)
 	if err != nil {
@@ -310,6 +296,29 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 		notice += "; " + launchNotice
 	}
 	return tuiCoordinatorLaunchResult(notice, paneID, paneBinding), nil
+}
+
+// Validate both agents before any gh call or pane creation. The worker's
+// selection must support the child mode used by the subsequent fanout plan.
+func validateIssuePlanAgents(projectRoot, coordinatorAgent, workerAgent string) error {
+	coordinator, err := agent.ParseSelection(coordinatorAgent)
+	if err != nil {
+		return err
+	}
+	worker, err := agent.ParseSelection(workerAgent)
+	if err != nil {
+		return err
+	}
+	childPlanMode := settings.Resolve(projectRoot, settings.CLIOverrides{}, nil).ChildPlanMode
+	if err := panelaunch.ValidateSelection(worker, childPlanMode, false); err != nil {
+		return err
+	}
+	for _, selection := range []agent.Selection{coordinator, worker} {
+		if err := agent.ValidateInstalled(selection.Name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func tuiCoordinatorLaunchResult(notice, paneID string, binding backend.PaneBinding) fanouttui.LaunchResult {
@@ -400,11 +409,12 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 		DisplayNameOverride: title,
 		Prompt:              planSkillPrompt(cfg.Agent, briefingPath),
 		Agent:               cfg.Agent,
-		LaunchMode:          coordinatorLaunchMode(cfg.Agent, cfg.PlanModeEnabled()),
-		ShellKey:            livenessKey,
-		Hooks:               hookConfig,
-		BriefingPath:        briefingPath,
-		BriefingBody:        prompt,
+		Model:               cfg.Model, Effort: cfg.Effort,
+		LaunchMode:   coordinatorLaunchMode(cfg.Agent, cfg.PlanModeEnabled()),
+		ShellKey:     livenessKey,
+		Hooks:        hookConfig,
+		BriefingPath: briefingPath,
+		BriefingBody: prompt,
 	}
 	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
@@ -431,11 +441,12 @@ func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig h
 		DisplayNameOverride: title,
 		Prompt:              planSkillPrompt(cfg.Agent, briefingPath),
 		Agent:               cfg.Agent,
-		LaunchMode:          coordinatorLaunchMode(cfg.Agent, cfg.PlanModeEnabled()),
-		ShellKey:            livenessKey,
-		Hooks:               hookConfig,
-		BriefingPath:        briefingPath,
-		BriefingBody:        briefing.RenderIssuePlanCoordinator(issue.Number, issue.Title, issue.Body, workerAgent),
+		Model:               cfg.Model, Effort: cfg.Effort,
+		LaunchMode:   coordinatorLaunchMode(cfg.Agent, cfg.PlanModeEnabled()),
+		ShellKey:     livenessKey,
+		Hooks:        hookConfig,
+		BriefingPath: briefingPath,
+		BriefingBody: briefing.RenderIssuePlanCoordinator(issue.Number, issue.Title, issue.Body, workerAgent),
 	}
 	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
@@ -503,14 +514,6 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		return "", err
 	}
 	agentNames := normalizeTUIAgents(req.Agents)
-	for _, agentName := range agentNames {
-		if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
-			return "", validateErr
-		}
-		if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-			return "", validateErr
-		}
-	}
 	resolverParent := attachResolverParent(projectRoot, req.Target)
 	resolvedTarget := req.Target
 	resolvedTarget.SourceParent = resolverParent
@@ -520,7 +523,11 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 	}}
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	cfg := newSessionConfigForTUIAgent(projectRoot, agentNames[0], launchLogger.Warn)
+	configs, err := newSessionConfigsForTUIAgents(projectRoot, agentNames, launchLogger.Warn)
+	if err != nil {
+		return "", err
+	}
+	cfg := configs[0]
 	cfg.ParentRef = resolverParent
 	rt, err := resolveTUILaunchRuntimeForTarget(projectRoot, "", target, cfg, provisional)
 	if err != nil {
@@ -546,8 +553,7 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		return "", fmt.Errorf("runtime backend: %w", err)
 	}
 	createdCount := 0
-	for _, agentName := range agentNames {
-		cfg := newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
+	for _, cfg := range configs {
 		cfg.ParentRef = resolverParent
 		launchStore := reclaimManagedSyntheticPaneNumber(
 			projectRoot, resolverParent, rt.Managed, recorder, recorder.Store,
@@ -693,14 +699,40 @@ func combinedLaunchNotice(notices []string, extra string) string {
 
 // newSessionConfigForTUIAgent resolves settings at launch time so a value saved
 // from the running TUI applies to the next manual, attach, or plan coordinator.
-func newSessionConfigForTUIAgent(projectRoot, agentName string, warnf settings.WarnFunc) *cliflags.Config {
+func newSessionConfigForTUIAgent(projectRoot, raw string, warnf settings.WarnFunc) (*cliflags.Config, error) {
 	planMode := settings.Resolve(projectRoot, settings.CLIOverrides{}, warnf).NewSessionPlanMode
-	return &cliflags.Config{
+	cfg := &cliflags.Config{
 		ParentRef:      panelaunch.ManualParentRef,
-		Agent:          agentName,
 		PlanMode:       &planMode,
 		TUIInteractive: true,
 	}
+	if err := cfg.SetAgent(raw); err != nil {
+		return nil, err
+	}
+	return cfg, panelaunch.ValidateSelection(cfg.EffectiveSelection(""), planMode, false)
+}
+
+func newSessionConfigsForTUIAgents(projectRoot string, raw []string, warnf settings.WarnFunc) ([]*cliflags.Config, error) {
+	configs := make([]*cliflags.Config, 0, len(raw))
+	for _, value := range raw {
+		cfg, err := newSessionConfigForTUIAgent(projectRoot, value, warnf)
+		if err != nil {
+			return nil, err
+		}
+		if err := agent.ValidateInstalled(cfg.Agent); err != nil {
+			return nil, err
+		}
+		configs = append(configs, cfg)
+	}
+	return configs, nil
+}
+
+func validateInstalledTUISelection(raw string) error {
+	selection, err := agent.ParseSelection(raw)
+	if err != nil {
+		return err
+	}
+	return agent.ValidateInstalled(selection.Name)
 }
 
 func newTUILaunchShellFunc(projectRoot, session string) fanouttui.ShellLaunchFunc {

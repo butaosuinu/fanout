@@ -30,10 +30,13 @@ dedicated git worktree under .fanout/worktrees/ and starts the configured agent
 with a briefing that points at .fanout/briefings/fanout-<repo>-<num>.md.
 
 Options:
-  --agent <name|NUM=name>
+  --agent <selection|NUM=selection>
                       Agent to launch (@SUPPORTED_AGENTS@). Repeatable: a bare
-                      name is the default, and NUM=name overrides one child
-                      issue. Required unless FANOUT_AGENT is set or every
+                      selection is the default; NUM=selection overrides a child.
+                      Selection is name[:model[:effort]]; claude::high selects
+                      effort only. OpenCode has no effort flag. Codex Plan/team
+                      model/effort selection is not supported yet (#791).
+                      Required unless FANOUT_AGENT is set or every
                       selected child has an override. Unknown agents fail
                       before pane creation; missing agent CLIs fail in live
                       mode.
