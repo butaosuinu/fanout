@@ -203,6 +203,16 @@ export async function mergeErrorMessage(res: Response): Promise<MessageDescripto
     : msg`マージに失敗しました (HTTP ${{ status: res.status }})`;
 }
 
+/* この PR の head branch を base にしている、この repository の open PR の番号。無ければ
+ * null。サーバの branchInUse(ErrBranchIsBase)と同じ条件で、ある間は削除ボタンを無効に
+ * する — 消したときに GitHub がその PR を付け替えるか close するかは確かめていない。
+ * others は snapshot にあるこの repository の PR。 */
+export function prBasedOn(pr: PRRef, others: readonly PRRef[]): number | null {
+  if (!pr.headRef) return null;
+  const above = (o: PRRef) => o.number !== pr.number && isOpen(o) && o.baseRef === pr.headRef;
+  return others.find(above)?.number ?? null;
+}
+
 /* マージ済みの行にだけ出す、後片付けボタンの出せる条件。サーバの admission
  * (mergeEnabled + PlanDelete)をそのまま写す — ここが緩いと、押すたびに必ず
  * 403 / 409 になるボタンを表示してしまう。

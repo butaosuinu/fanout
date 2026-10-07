@@ -196,7 +196,9 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
   いると、web はサーバより広く塞ぐ。押せなくなるだけで、誤ってマージはしない。
 - 下の層がマージ済みでも branch が残っていれば、手積みの上の層の base はその branch の
   まま。そこでマージすると trunk には入らない。この状態は検査しない(長寿命 branch の
-  マージ済み PR と区別できない)。base の付け替えは、下の層の branch 削除で GitHub が行う。
+  マージ済み PR と区別できない)。base の付け替えは GitHub 上で行う(PR の base を変えるか、
+  GitHub の UI で下の層の branch を消す)。ダッシュボードの削除は、上の層が open の間
+  `branch_is_base` で拒否する。
 
 ## stacked PR の branch 削除
 
@@ -208,7 +210,10 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
   (この endpoint の経路)でも同じかは未確認で、付け替わらなければ PR は close される。
 - そのため、削除する branch を base にする open PR がこの repository にある間は、削除を
   409 `branch_is_base` で拒否する。一覧は `--limit` で打ち切られても、載った行は全部
-  数える。
+  数える。この拒否は #839 の方針として確定した(2026-10-07)。REST 削除での付け替えは
+  実測していない。
+- web の削除ボタンも同じ条件(snapshot にある、その branch を base にする open PR)で理由付きに
+  無効化する。どの行にも載らない PR はサーバの 409 が返す。
 
 ## 表示側(mutation の不変条件ではない)
 

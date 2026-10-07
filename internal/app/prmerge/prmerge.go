@@ -518,7 +518,8 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 // An open pull request based on this branch is the next layer of a stack built
 // by hand (a native stack retargets it when the layer below merges). Whether
 // GitHub retargets it when the ref is deleted through the REST API, rather than
-// closing it, is unverified, so the delete does not find out.
+// closing it, is unverified, so the delete does not find out — the policy #839
+// settled on, mirrored by the web's disabled Delete branch button.
 func (s Service) branchInUse(ctx context.Context, req DeleteRequest) error {
 	others, err := s.GH.OpenPRNumbersForHead(ctx, req.Owner, req.Repo, req.Branch)
 	if err != nil {

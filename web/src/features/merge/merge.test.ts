@@ -5,6 +5,7 @@ import type { PRStack } from "../../transport/types";
 import {
   canDeleteBranch,
   layerBelow,
+  prBasedOn,
   mergeBlockReason,
   mergeTargetPr,
   mergeWarnings,
@@ -262,6 +263,29 @@ describe("mergeTargetPr", () => {
       makePr({ number: 700, headRef: "fanout/lower" }),
     ];
     expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: prs })?.number).toBe(700);
+  });
+});
+
+/* サーバの branchInUse(ErrBranchIsBase)と同じ条件。 */
+describe("prBasedOn", () => {
+  const merged = makePr({ number: 700, state: "MERGED", headRef: "fanout/lower" });
+
+  it("head branch を base にしている open PR の番号を返す", () => {
+    const upper = makePr({ number: 701, baseRef: "fanout/lower" });
+    expect(prBasedOn(merged, [merged, upper])).toBe(701);
+  });
+
+  it("マージ済みや close 済みの PR は数えない", () => {
+    const others = [
+      makePr({ number: 701, baseRef: "fanout/lower", state: "MERGED" }),
+      makePr({ number: 702, baseRef: "fanout/lower", state: "CLOSED" }),
+    ];
+    expect(prBasedOn(merged, others)).toBeNull();
+  });
+
+  it("head branch が分からなければ null", () => {
+    const upper = makePr({ number: 701, baseRef: "" });
+    expect(prBasedOn(makePr({ headRef: undefined }), [upper])).toBeNull();
   });
 });
 

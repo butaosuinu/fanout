@@ -237,7 +237,7 @@ stack は下の層から順にマージします。GitHub の native stack で�
 default branch は層として数えません。それ以外の長寿命 branch は層と同じに見えます。`develop` → `main` の release PR が open の間は、`develop` への PR もマージを待ちます。
 GitHub は native stack のどの層についても、最下層を含めてダッシュボードのマージ(`gh pr merge`)を拒否するので、それらの層のボタンは無効になります。native stack は GitHub 上でマージしてください。
 
-**ブランチを削除**も、この repository の open PR がその branch を base にしている間は拒否します。手で積んだ stack の次の層です。GitHub の UI から branch を消すと、GitHub はその PR の base を付け替えます。API からの削除でも同じかは未確認で、付け替わらなければ GitHub はその PR を close します。
+**ブランチを削除**も、この repository の open PR がその branch を base にしている間は拒否します。手で積んだ stack の次の層で、その PR がダッシュボードにあればボタンは無効になります。GitHub の UI から branch を消すと GitHub はその PR の base を付け替えるので、付け替えは GitHub 上で行ってください。API からの削除でも同じかは未確認で、付け替わらなければ GitHub はその PR を close します。
 
 ダッシュボードは描画時に見ていた PR 番号と head commit を送り、サーバはその commit を `--match-head-commit` として GitHub に渡します。
 ページを開いてからクリックするまでの間に push された PR は、そのままマージされるのではなく拒否されます。

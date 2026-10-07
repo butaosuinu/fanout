@@ -1054,6 +1054,48 @@ describe("マージ後のブランチ削除", () => {
     );
   });
 
+  /* その branch を base にしている open PR がある間、サーバは 409 branch_is_base で
+   * 拒否する。押すたびに 409 になるボタンにしない。 */
+  it("この branch を base にしている open PR があれば、削除ボタンを無効にする", async () => {
+    const calls: unknown[] = [];
+    server.use(
+      http.post(DELETE_BRANCH_PATH, () => {
+        calls.push(1);
+        return HttpResponse.json({ prNumber: 701, branch: "fanout/fix-login", deleted: true });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            prs: [makePr({ state: "MERGED", headRef: "fanout/fix-login" })],
+          }),
+          makePane({
+            issueNum: 102,
+            displayName: "Upper layer",
+            slug: "upper",
+            paneId: "%2",
+            branchName: "fanout/upper",
+            prs: [makePr({ number: 702, headRef: "fanout/upper", baseRef: "fanout/fix-login" })],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    const remove = within(drawer).getByRole("button", { name: /#702 がこの branch を base に/ });
+    expect(remove).toHaveAttribute("aria-disabled", "true");
+    await user.click(remove);
+    expect(calls).toHaveLength(0);
+  });
+
   /* stack map は他の行の層も描くが、削除は行の head と照合される。他の行の層に
    * 出すと、押すたびに 409 になるボタンになる。 */
   it("stack map では自分の層にだけ出し、他の行の層には出さない", async () => {

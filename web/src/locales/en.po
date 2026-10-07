@@ -153,6 +153,10 @@ msgstr "Layers of a GitHub-native stack cannot be merged from the dashboard (mer
 msgid "言語"
 msgstr "Language"
 
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "#{pr} がこの branch を base にしているため削除できません"
+msgstr "Cannot delete: #{pr} uses this branch as its base"
+
 #: src/app/App.tsx
 msgid "アクティブなセッションがありません"
 msgstr "No active sessions"
@@ -606,6 +610,10 @@ msgstr "Summary"
 #: src/features/diff/DiffBody.tsx
 msgid "patch のあるファイルはすべて確認済みです"
 msgstr "Every file with a patch is viewed"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "ブランチを削除 — {reason}"
+msgstr "Delete branch — {reason}"
 
 #: src/features/filter/FilterDropdown.tsx
 msgid "{key} の選択肢を検索"

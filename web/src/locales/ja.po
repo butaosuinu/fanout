@@ -153,6 +153,10 @@ msgstr "GitHub の native stack の層はダッシュボードからマージで
 msgid "言語"
 msgstr "言語"
 
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "#{pr} がこの branch を base にしているため削除できません"
+msgstr "#{pr} がこの branch を base にしているため削除できません"
+
 #: src/app/App.tsx
 msgid "アクティブなセッションがありません"
 msgstr "アクティブなセッションがありません"
@@ -606,6 +610,10 @@ msgstr "集計"
 #: src/features/diff/DiffBody.tsx
 msgid "patch のあるファイルはすべて確認済みです"
 msgstr "patch のあるファイルはすべて確認済みです"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "ブランチを削除 — {reason}"
+msgstr "ブランチを削除 — {reason}"
 
 #: src/features/filter/FilterDropdown.tsx
 msgid "{key} の選択肢を検索"
