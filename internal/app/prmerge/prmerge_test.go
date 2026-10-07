@@ -3,6 +3,7 @@ package prmerge
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
@@ -295,8 +296,9 @@ type fakePort struct {
 	fenceErr   error
 	confirmErr error
 	// liveBase / liveHead override what the pre-merge fence reads back.
-	liveBase string
-	liveHead string
+	liveBase    string
+	liveHead    string
+	liveDefault string
 	// alwaysMerged reports merged on the very first read (the delete path has no
 	// pre-merge fence to skip past).
 	alwaysMerged bool
@@ -311,7 +313,20 @@ type fakePort struct {
 	liveCloses     []ghissue.ClosingIssue
 	openHeads      []int
 	openHeadsErr   error
-	mergedRead     int
+	// fromBranch is what OpenPRNumbersFromBranch answers: the OPEN pull requests
+	// this repository's branch heads. fromQueries records the branches asked.
+	fromBranch    []int
+	fromBranchErr error
+	fromQueries   []string
+	// openBases is what OpenPRNumbersForBase answers: the OPEN pull requests
+	// based on the branch.
+	openBases    []int
+	openBasesErr error
+	// stack and stackErr are what PRStack answers; nil is a pull request in no
+	// stack.
+	stack      *ghissue.PRStack
+	stackErr   error
+	mergedRead int
 }
 
 func (f *fakePort) MergePR(_ context.Context, req ghissue.MergePRRequest) error {
@@ -330,13 +345,14 @@ func (f *fakePort) PRState(_ context.Context, _, _ string, _ int) (ghissue.PRTar
 	// The pre-merge fence reads first; only later reads report the merge.
 	merged := f.alwaysMerged || (!f.notMerged && f.mergedRead > 1)
 	return ghissue.PRTarget{
-		Merged:       merged,
-		BaseRef:      cmpOr(f.liveBase, "main"),
-		HeadRef:      cmpOr(f.liveHeadRef, "fanout/foo"),
-		AutoMerge:    f.probeAutoMerge && f.mergedRead > 1,
-		Queued:       f.probeQueued && f.mergedRead > 1,
-		ClosesIssues: f.liveCloses,
-		HeadSha:      cmpOr(f.liveHead, "abc123"),
+		Merged:        merged,
+		BaseRef:       cmpOr(f.liveBase, "main"),
+		DefaultBranch: f.liveDefault,
+		HeadRef:       cmpOr(f.liveHeadRef, "fanout/foo"),
+		AutoMerge:     f.probeAutoMerge && f.mergedRead > 1,
+		Queued:        f.probeQueued && f.mergedRead > 1,
+		ClosesIssues:  f.liveCloses,
+		HeadSha:       cmpOr(f.liveHead, "abc123"),
 	}, nil
 }
 
@@ -349,6 +365,19 @@ func cmpOr(v, fallback string) string {
 
 func (f *fakePort) OpenPRNumbersForHead(_ context.Context, _, _, _ string) ([]int, error) {
 	return f.openHeads, f.openHeadsErr
+}
+
+func (f *fakePort) OpenPRNumbersFromBranch(_ context.Context, _, _, branch string) ([]int, error) {
+	f.fromQueries = append(f.fromQueries, branch)
+	return f.fromBranch, f.fromBranchErr
+}
+
+func (f *fakePort) OpenPRNumbersForBase(_ context.Context, _, _, _ string) ([]int, error) {
+	return f.openBases, f.openBasesErr
+}
+
+func (f *fakePort) PRStack(_ context.Context, _, _ string, _ int) (*ghissue.PRStack, error) {
+	return f.stack, f.stackErr
 }
 
 func (f *fakePort) DeleteRemoteBranch(_ context.Context, _, _, branch, expectedOID string) error {
@@ -626,6 +655,124 @@ func TestMergeRefusesAPullRequestTheRowNoLongerOwns(t *testing.T) {
 	}
 }
 
+// TestMergeRefusesALayerOfAHandBuiltStack pins the chain half of the stack
+// fence: a pull request whose live base is the head of another open pull
+// request merges into that branch, not the trunk, so it waits for the layer
+// below.
+func TestMergeRefusesALayerOfAHandBuiltStack(t *testing.T) {
+	t.Run("refuses while an open pull request heads the live base", func(t *testing.T) {
+		port := &fakePort{fromBranch: []int{6}, liveBase: "fanout/lower"}
+		req := baseRequest()
+		req.BaseRef = "fanout/lower"
+		_, err := Service{GH: port}.Merge(context.Background(), req)
+		if !errors.Is(err, ErrStackBelow) {
+			t.Fatalf("Merge() error = %v, want ErrStackBelow", err)
+		}
+		if len(port.mergeCalls) != 0 {
+			t.Fatalf("merge calls = %#v, want none", port.mergeCalls)
+		}
+		if !slices.Equal(port.fromQueries, []string{"fanout/lower"}) {
+			t.Fatalf("branch queries = %v, want the live base", port.fromQueries)
+		}
+	})
+
+	/* trunk から出た open PR(main を develop へ同期する PR など)は stack の層では
+	 * ない。数えると main へのマージが全部止まる。 */
+	t.Run("never asks about the default branch", func(t *testing.T) {
+		port := &fakePort{fromBranch: []int{6}, liveDefault: "main"}
+		if _, err := (Service{GH: port}).Merge(context.Background(), baseRequest()); err != nil {
+			t.Fatal(err)
+		}
+		if len(port.fromQueries) != 0 || len(port.mergeCalls) != 1 {
+			t.Fatalf("branch queries = %v, merge calls = %d, want none and one merge", port.fromQueries, len(port.mergeCalls))
+		}
+	})
+
+	t.Run("an unreadable list refuses", func(t *testing.T) {
+		port := &fakePort{fromBranchErr: errors.New("gh: HTTP 502")}
+		if _, err := (Service{GH: port}).Merge(context.Background(), baseRequest()); err == nil {
+			t.Fatal("Merge() error = nil, want the read failure")
+		}
+		if len(port.mergeCalls) != 0 {
+			t.Fatalf("merge calls = %#v, want none", port.mergeCalls)
+		}
+	})
+}
+
+// TestMergeRefusesAMidStackLayer pins the live stack fence. GitHub merges the
+// unmerged layers below a mid-stack pull request along with it, so the merge
+// runs only once every layer below is merged, read live rather than from the
+// display-only snapshot copy.
+func TestMergeRefusesAMidStackLayer(t *testing.T) {
+	layer := func(pos, num int, state string) ghissue.PRStackEntry {
+		return ghissue.PRStackEntry{Position: pos, PR: ghissue.PRRef{Number: num, State: state}}
+	}
+	stack := func(pos int, entries ...ghissue.PRStackEntry) *ghissue.PRStack {
+		return &ghissue.PRStack{Number: 3, Size: 3, BaseRef: "main", Position: pos, Entries: entries}
+	}
+	tests := []struct {
+		name    string
+		live    fakePort
+		wantErr error
+	}{
+		{name: "a pull request in no stack merges"},
+		{
+			name: "the bottom layer merges with layers open above it",
+			live: fakePort{stack: stack(1, layer(1, 7, "OPEN"), layer(2, 8, "OPEN"))},
+		},
+		{
+			name: "a layer whose layers below all merged merges",
+			live: fakePort{stack: stack(3, layer(1, 5, "MERGED"), layer(2, 6, "MERGED"), layer(3, 7, "OPEN"))},
+		},
+		{
+			name:    "refuses while a layer below is open",
+			live:    fakePort{stack: stack(2, layer(1, 5, "OPEN"), layer(2, 7, "OPEN"), layer(3, 8, "OPEN"))},
+			wantErr: ErrStackBelow,
+		},
+		{
+			// GitHub would try to land it with this layer; the dashboard does not
+			// decide what a closed layer below means.
+			name:    "refuses while a layer below is closed",
+			live:    fakePort{stack: stack(2, layer(1, 5, "CLOSED"), layer(2, 7, "OPEN"))},
+			wantErr: ErrStackBelow,
+		},
+		{
+			// entries stop at one page; a layer the read did not return is not merged.
+			name:    "refuses when a layer below was not returned",
+			live:    fakePort{stack: stack(3, layer(2, 6, "MERGED"), layer(3, 7, "OPEN"))},
+			wantErr: ErrStackBelow,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port := tt.live
+			_, err := Service{GH: &port}.Merge(context.Background(), baseRequest())
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Merge() error = %v, want %v", err, tt.wantErr)
+			}
+			want := 0
+			if tt.wantErr == nil {
+				want = 1
+			}
+			if len(port.mergeCalls) != want {
+				t.Fatalf("merge calls = %d, want %d", len(port.mergeCalls), want)
+			}
+		})
+	}
+
+	// The stack schema is a preview. A read that fails cannot rule out taking
+	// other pull requests along, so the merge does not run.
+	t.Run("refuses when the stack cannot be read", func(t *testing.T) {
+		port := &fakePort{stackErr: errors.New("gh api graphql: field stack does not exist")}
+		if _, err := (Service{GH: port}).Merge(context.Background(), baseRequest()); err == nil {
+			t.Fatal("Merge() error = nil, want the read failure")
+		}
+		if len(port.mergeCalls) != 0 {
+			t.Fatalf("merge calls = %#v, want none", port.mergeCalls)
+		}
+	})
+}
+
 // TestServiceDeleteBranch pins the separated cleanup. It is idempotent and
 // stateless, which is the whole reason it is its own action — but it still has
 // to prove the pull request actually merged before discarding its head ref.
@@ -652,6 +799,29 @@ func TestServiceDeleteBranch(t *testing.T) {
 		err := Service{GH: port}.DeleteBranch(context.Background(), req)
 		if !errors.Is(err, ErrBranchInUse) {
 			t.Fatalf("DeleteBranch() error = %v, want ErrBranchInUse", err)
+		}
+		if len(port.deleteCalls) != 0 {
+			t.Fatalf("delete calls = %#v, want none", port.deleteCalls)
+		}
+	})
+
+	/* 手で積んだ stack の次の層。REST での ref 削除が retarget するか close するかは
+	 * 未確認なので、base にしている open PR がある間は消さない。 */
+	t.Run("refuses while an open pull request is based on the branch", func(t *testing.T) {
+		port := &fakePort{alwaysMerged: true, openBases: []int{12}}
+		err := Service{GH: port}.DeleteBranch(context.Background(), req)
+		if !errors.Is(err, ErrBranchIsBase) {
+			t.Fatalf("DeleteBranch() error = %v, want ErrBranchIsBase", err)
+		}
+		if len(port.deleteCalls) != 0 {
+			t.Fatalf("delete calls = %#v, want none", port.deleteCalls)
+		}
+	})
+
+	t.Run("an unreadable base list never deletes", func(t *testing.T) {
+		port := &fakePort{alwaysMerged: true, openBasesErr: errors.New("gh unavailable")}
+		if err := (Service{GH: port}).DeleteBranch(context.Background(), req); err == nil {
+			t.Fatal("DeleteBranch() error = nil, want the read failure")
 		}
 		if len(port.deleteCalls) != 0 {
 			t.Fatalf("delete calls = %#v, want none", port.deleteCalls)

@@ -367,6 +367,66 @@ describe("snapshot 描画", () => {
     expect(
       within(drawer).getByRole("link", { name: "#839 closed" }).closest("li.d-stack"),
     ).toBeNull();
+
+    // 他の行の名前を押すと、その行のドロワーへ切り替わる
+    await user.click(within(layers[0]!).getByRole("button", { name: "Layer three" }));
+    const self = within(screen.getByRole("complementary", { name: "ペイン詳細" }))
+      .getByText("◀ この Session")
+      .closest("li")!;
+    expect(within(self).getByRole("link", { name: "#845 open" })).toBeInTheDocument();
+    expect(other).toHaveClass("selected");
+    // 押した名前のボタンは消えるので、フォーカスは切り替えた先のドロワーへ
+    await waitFor(() => expect(screen.getByRole("button", { name: "詳細を閉じる" })).toHaveFocus());
+  });
+
+  /* 同じ PR が複数の行に載ると、層の持ち主も複数になる。名前を区切らないと
+   * 1 つの名前に見え、どれを押すとどの行に切り替わるのか分からない。 */
+  it("同じ層を持つ行が複数なら、名前を区切って並べる", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "owners output"));
+    const entries = [
+      { position: 1, pr: { number: 844, state: "OPEN", mergedAt: null } },
+      { position: 2, pr: { number: 845, state: "OPEN", mergedAt: null } },
+    ];
+    const stack = (position: number) => ({
+      number: 12,
+      size: 2,
+      baseRef: "main",
+      position,
+      entries,
+    });
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("150", [
+          makePane({
+            issueNum: 151,
+            displayName: "Layer one",
+            prs: [makePr({ number: 844, stack: stack(1) })],
+          }),
+          makePane({
+            issueNum: 152,
+            displayName: "Layer two",
+            prs: [makePr({ number: 845, stack: stack(2) })],
+          }),
+          makePane({
+            issueNum: 153,
+            displayName: "Layer two again",
+            prs: [makePr({ number: 845, stack: stack(2) })],
+          }),
+        ]),
+      ]),
+    );
+
+    await user.click(screen.getByText("Layer one"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    const layer = within(drawer).getByRole("link", { name: "#845 open" }).closest("li")!;
+    expect(
+      within(layer)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Layer two", "Layer two again"]);
+    expect(layer.textContent).toContain("Layer two, Layer two again");
   });
 
   it("base が別の行の PR の head なら推定の連鎖として出す", async () => {

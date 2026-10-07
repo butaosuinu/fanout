@@ -323,8 +323,10 @@ func (g GH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
 	return g.runner.PRsForBranchDetail(g.owner, g.repo, branch)
 }
 
-// PRStacks reads the GitHub-native stack of each numbered pull request. Only
-// the dashboard poller calls it.
+// PRStacks reads the GitHub-native stack of each numbered pull request. The
+// dashboard poller and the TUI's issue status loader call it, for display: a
+// nil entry is a pull request read and found in no stack, a missing key one
+// that was not read.
 func (g GH) PRStacks(nums []int) (map[int]*ghissue.PRStack, error) {
 	return g.runner.PRStacks(g.owner, g.repo, nums)
 }

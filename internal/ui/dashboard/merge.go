@@ -704,6 +704,8 @@ var mergePreflightSentinels = []struct {
 	{prmerge.ErrForeignPR, "pr_not_on_row"},
 	{prmerge.ErrNotMerged, "not_merged"},
 	{prmerge.ErrBranchInUse, "branch_in_use"},
+	{prmerge.ErrStackBelow, "stack_below_unmerged"},
+	{prmerge.ErrBranchIsBase, "branch_is_base"},
 }
 
 // mergePreflightCode names the refusal. The status is always 409, so it is the

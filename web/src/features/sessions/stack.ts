@@ -57,7 +57,9 @@ export function buildStackIndex(snap: Snapshot | null): StackIndex {
 
 export const EMPTY_STACK_INDEX = buildStackIndex(null);
 
-function indexPrs(snap: Snapshot | null, repo: string): StackIndex["prs"] {
+/* snapshot 全体のこの repository の PR を番号で引く。同じ PR が複数行に載るときは
+ * 最初のコピーを持ち、owners に全員を並べる。 */
+export function indexPrs(snap: Snapshot | null, repo: string): StackIndex["prs"] {
   const out: StackIndex["prs"] = new Map();
   const rows = (snap?.sessions ?? [])
     .flatMap((s) => s.panes ?? [])

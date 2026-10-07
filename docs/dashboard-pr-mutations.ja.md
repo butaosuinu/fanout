@@ -153,11 +153,70 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
    編集して戻した変更は、もう存在しない作業を patch に見せうる。この方向は merge が運ぶ
    より多く見せるだけで、少なく見せることはない。フェンスが防ぐのは後者。
 
-## stacked PR(未対応)
+## stacked PR
 
-- GitHub の stacked PR では、ある層をマージするとその下の未マージの層もまとめて
-  マージされる。途中の層に対する `gh pr merge` が同じ挙動をするかは未確認で、そう
-  なら「GitHub の PR 1 件に閉じる」は途中の層で成り立たない。
-- ダッシュボードは stack を表示するだけで、マージもブランチ削除も stack を考慮
-  しない。`PRRef.Stack` は表示専用で、mutation の判定にも保持の解放にも使わない。
-- 対応は #839。
+- GitHub の native stacked PR では、途中の層をマージすると下の未マージの層もまとめて
+  マージされる。公式 docs は、REST の同期 merge API と GraphQL の `mergePullRequest`
+  (`gh pr merge` が使う)を stacked PR 非対応とし、API からは非同期 merge API
+  (`merge-async`)を使うよう求めている。`merge-async` は下の open な層ごとマージする。
+- 実測(2026-10-06、private の fixture repository、native stack 3 層): `gh pr merge` は
+  途中の層も最下層も「This pull request is part of a stack and must be merged using the
+  asynchronous merge REST API.」で拒否し、何も変えなかった。途中の層への `merge-async` は、
+  下の未マージの層と一緒に下から順に trunk へマージし、上の層は trunk へ自動で付け替わった。
+- ダッシュボードのマージは `gh pr merge` を使うので、native stack の層は最下層も含めて
+  マージできない。web は native stack の層をすべて理由付きで無効化する。サーバは途中の層を
+  409 で拒否し、最下層は検査を通るが GitHub が拒否して 422 `github_rejected` で返る。
+  native stack は GitHub 側でマージする。
+- 手で積んだ stack(base が別の PR の head)では、途中の層は trunk ではなく下の層の
+  branch へマージされる。下の層はその変更をレビューされないまま運ぶ。GitHub の通常の
+  挙動で、fixture での実測は行っていない。
+- どちらの形でも、下の層が未マージの間は途中の層のマージを 409 `stack_below_unmerged`
+  で拒否する。判定は merge 直前の live 読み取りで行う。snapshot の `PRRef.Stack` は web の
+  無効化理由にだけ使い、サーバの判定にも保持の解放にも使わない。
+  - 手積み: live の base を head に持つ open PR がこの repository にあるか。REST の
+    `head=<owner>:<branch>` で引き、fork の同名 branch は数えない。`gh pr list --head main`
+    は fork の `main` からの PR も返し(microsoft/vscode で 58 件、2026-10-04)、一覧の上限で
+    拒否に倒れて main へのマージが全部止まる。
+  - native: live の stack 読み取りで、自分より下の層に未マージ(close を含む)が無いか。
+    読み取りが返さなかった層(entries は 100 層まで)は未マージとして数える。
+- base が default branch なら手積みの検査をしない。stack は trunk の上に積むもので、
+  trunk から出た open PR(main を develop へ同期する PR)を数えると main へのマージが
+  全部止まる。
+- stack の読み取りに失敗したら拒否する。他の PR を巻き込まないことを証明できない
+  merge は撃たない。例外は schema に stack のフィールドが無い応答(`undefinedField`)で、
+  stack の無いサーバとして扱う。preview の改名も同じに見えるが、native stack の途中層は
+  下の層の head を base にするので、下の層が open なら手積みの検査が拒否する。下の層が
+  close 済みでそれを通っても、GitHub が stacked PR の `gh pr merge` を拒否する(実測)。
+- default branch 以外の長寿命 branch を base にする PR も塞ぐ。`develop` → `main` の
+  release PR が open の間は、`develop` へのマージが止まる。GitHub 上で stack の層と区別
+  できないため。
+- web は同じ述語を snapshot で評価し、理由付きで無効化する。どの行にも載らない下の層は
+  web から見えず、サーバの live 読み取りが 409 で返す。逆に snapshot は default branch を
+  持たないので、issue 行が closing-issue link で trunk を head に持つ open PR を載せて
+  いると、web はサーバより広く塞ぐ。押せなくなるだけで、誤ってマージはしない。
+- 下の層がマージ済みでも branch が残っていれば、手積みの上の層の base はその branch の
+  まま。そこでマージすると trunk には入らない。この状態は検査しない(長寿命 branch の
+  マージ済み PR と区別できない)。base の付け替えは GitHub 上で行う(PR の base を変えるか、
+  GitHub の UI で下の層の branch を消す)。ダッシュボードの削除は、上の層が open の間
+  `branch_is_base` で拒否する。
+
+## stacked PR の branch 削除
+
+- native stack は、下の層のマージ時点で上の層の base を trunk へ付け替える(#823 の
+  マージ 2 秒後に #826 の AutomaticBaseChangeSucceededEvent、head 削除はその後)。
+  削除の時点で上の層はもうその branch を base にしていない。
+- 手積みの次の層は、下の層がマージされても base が残る。GitHub は、マージ済み PR の head
+  branch を消すと、それを base にする open PR を付け替えるとしている。REST の ref 削除
+  (この endpoint の経路)でも同じかは未確認で、付け替わらなければ PR は close される。
+- そのため、削除する branch を base にする open PR がこの repository にある間は、削除を
+  409 `branch_is_base` で拒否する。一覧は `--limit` で打ち切られても、載った行は全部
+  数える。この拒否は #839 の方針として確定した(2026-10-07)。REST 削除での付け替えは
+  実測していない。
+- web の削除ボタンも同じ条件(snapshot にある、その branch を base にする open PR)で理由付きに
+  無効化する。どの行にも載らない PR はサーバの 409 が返す。
+
+## 表示側(mutation の不変条件ではない)
+
+- TUI の PR 列は、native stack の層の位置を `⧉ 2/3` で出す。stack は dashboard の poller と
+  同じ読み取り(`GH.PRStacks`)を wave 間隔ごとに行い、表示にだけ使う。
+- ドロワーの stack map は、他の行の名前からその行のドロワーへ切り替える。

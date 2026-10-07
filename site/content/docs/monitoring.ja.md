@@ -32,6 +32,7 @@ tmux backend では、素のシェルから起動すると fanout 管理の tmux
 herdr backend では、素のシェルから起動するとリポジトリの fanout-owned session と console workspace を bootstrap し、そのまま session に入ります(端末がない場合は attach command を表示します)。
 コンソールは `.fanout/state.json` を読み、記録済みペインの issue と PR の状態を定期更新し、各行の worktree には変更量を `+X/-Y`、未 commit の作業の有無を `dirty` / `clean` で示します。
 `RUN` 列には agent の実行状態がグリフで出て(起動ラッパー由来の `●` running・`✓` done に加え、agent hooks が報告すると `◐` working・`◇` plan・`◆` blocked・`○` idle)、detail panel には同じ値が `run=` として出ます。
+GitHub の native stack に属する PR は、`PR` 列に `⧉ 2/3` の形で層の位置が付きます。GitHub から約 1 分ごとに読みます。
 マウスや tmux の `prefix` ペイン移動で記録済み tmux ペインへフォーカスすると、TUI の選択行もそのペインに追従します。
 
 コンソールは backend を認識します。ヘッダには選択中の runtime backend と選択理由(例: `backend: herdr (HERDR_ENV)`)が出て、detail panel には各行の `backend=` と `pane=` の identity が出ます。
@@ -196,7 +197,7 @@ conflict タグは GitHub が競合を報告したときだけ出ます。merge 
 stacked PR の層にある PR には、`pr` 列に `⧉ 2/3` タグが付きます。base branch から
 数えて 3 層中の 2 層目という意味です。詳細ドロワーは stack を 1 本の柱として描き、
 上の層ほど上、底に base branch を置きます。この行の PR にはいつものタグと
-`◀ この Session` の印が、他の行が持つ層にはその行の名前が付き、どの行にも無い層は
+`◀ この Session` の印が、他の行が持つ層にはその行の名前が付き(押すとその行のドロワーに切り替わります)、どの行にも無い層は
 状態ピルだけです。GitHub の native stacked PR は GitHub から約 1 分ごとに読みます。
 同じ repository で、base branch がダッシュボード上の別の open な PR の head branch に
 なっている open な PR も、推定の連鎖として同じように描きます。見出しに「推定」と
@@ -227,11 +228,16 @@ PR が紐付いている Session には**マージ**ボタンが出ます。置�
 
 マージが終わると、詳細ドロワーの PR の隣に**ブランチを削除**ボタンが現れます。GitHub 自身の "Delete branch" と同じ扱いです。消えるのは GitHub 側の branch だけで、worktree とローカル branch はそのまま残ります(それらは従来どおり `--cleanup` の担当)。fork の branch と、マージ後に動いた branch は対象外です。ただし GitHub API に条件付きの ref 削除が無いため、削除直前の確認と削除リクエストの間に push されたコミットまでは守れません。
 
-マージが成立しない状態ではボタンが理由付きで無効になります。PR が無い、すでにマージ済み、close 済み、draft のまま、base branch と競合している、の 5 つです。
+マージが成立しない状態ではボタンが理由付きで無効になります。PR が無い、すでにマージ済み、close 済み、draft のまま、base branch と競合している、GitHub の native stack の層である、stack の下の層がまだマージされていない、の 7 つです。
 CI の失敗やレビュー未承認では無効になりません。それらがマージを止めるかどうかは branch protection の設定次第なので、ボタンは押せるままにしてメニューに警告を出します。
 GitHub が拒否した場合はその旨をエラーで表示し、PR は変わりません。
 
-マージとブランチ削除のボタンは stack を考慮しません。GitHub では、ある層をマージするとその下の未マージの層もまとめてマージされます。stack は下の層から順にマージしてください。
+stack は下の層から順にマージします。GitHub の native stack では、ある層をマージするとその下の未マージの層もまとめてマージされます。手で積んだ PR は trunk ではなく下の層の branch へマージされます。
+そのため、下の層が未マージの間はボタンが無効になります。対象は GitHub native stack の下の層と、この PR の base を head に持つこの repository の open PR です。サーバはマージ前に GitHub で同じ条件を確かめ、ダッシュボードのどの行にも無い下の層も見ます。
+default branch は層として数えません。それ以外の長寿命 branch は層と同じに見えます。`develop` → `main` の release PR が open の間は、`develop` への PR もマージを待ちます。
+GitHub は native stack のどの層についても、最下層を含めてダッシュボードのマージ(`gh pr merge`)を拒否するので、それらの層のボタンは無効になります。native stack は GitHub 上でマージしてください。
+
+**ブランチを削除**も、この repository の open PR がその branch を base にしている間は拒否します。手で積んだ stack の次の層で、その PR がダッシュボードにあればボタンは無効になります。GitHub の UI から branch を消すと GitHub はその PR の base を付け替えるので、付け替えは GitHub 上で行ってください。API からの削除でも同じかは未確認で、付け替わらなければ GitHub はその PR を close します。
 
 ダッシュボードは描画時に見ていた PR 番号と head commit を送り、サーバはその commit を `--match-head-commit` として GitHub に渡します。
 ページを開いてからクリックするまでの間に push された PR は、そのままマージされるのではなく拒否されます。

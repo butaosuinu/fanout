@@ -85,8 +85,9 @@ type PRRef struct {
 	// repo>` would resolve that number against the wrong repository.
 	BaseRepo string `json:"baseRepo,omitempty"`
 	// Stack is the pull request's GitHub-native stack, when it belongs to one.
-	// Only the dashboard poller fills it (see PRStacks); every other path leaves
-	// it nil. A pointer, so omitempty drops it and existing JSON stays unchanged.
+	// Only the dashboard poller and the TUI's PR column fill it (see PRStacks);
+	// every other path leaves it nil. A pointer, so omitempty drops it and
+	// existing JSON stays unchanged.
 	Stack *PRStack `json:"stack,omitempty"`
 }
 
