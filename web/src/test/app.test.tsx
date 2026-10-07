@@ -375,6 +375,8 @@ describe("snapshot 描画", () => {
       .closest("li")!;
     expect(within(self).getByRole("link", { name: "#845 open" })).toBeInTheDocument();
     expect(other).toHaveClass("selected");
+    // 押した名前のボタンは消えるので、フォーカスは切り替えた先のドロワーへ
+    await waitFor(() => expect(screen.getByRole("button", { name: "詳細を閉じる" })).toHaveFocus());
   });
 
   /* 同じ PR が複数の行に載ると、層の持ち主も複数になる。名前を区切らないと

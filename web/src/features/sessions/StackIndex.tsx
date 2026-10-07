@@ -26,7 +26,11 @@ export function StackIndexProvider({
   const select = useCallback(
     (pane: PaneView) => {
       const key = rowKeyOf(snap, pane);
-      if (key) onSelect(key);
+      if (!key) return;
+      onSelect(key);
+      /* ドロワーは行ごとに作り直されるので、押した名前のボタンごと消えてフォーカスが
+       * body に落ちる。切り替えた先のドロワーへ戻す。 */
+      requestAnimationFrame(() => document.getElementById("drawer-close")?.focus());
     },
     [snap, onSelect],
   );
