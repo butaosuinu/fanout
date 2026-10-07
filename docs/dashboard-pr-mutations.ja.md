@@ -159,8 +159,16 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
   マージされる。公式 docs は、REST の同期 merge API と GraphQL の `mergePullRequest`
   (`gh pr merge` が使う)を stacked PR 非対応とし、API からは非同期 merge API
   (`merge-async`)を使うよう求めている。`merge-async` は下の open な層ごとマージする。
+- 実測(2026-10-06、private の fixture repository、native stack 3 層): `gh pr merge` は
+  途中の層も最下層も「This pull request is part of a stack and must be merged using the
+  asynchronous merge REST API.」で拒否し、何も変えなかった。途中の層への `merge-async` は、
+  下の未マージの層と一緒に下から順に trunk へマージし、上の層は trunk へ自動で付け替わった。
+- ダッシュボードのマージは `gh pr merge` を使うので、native stack の層は最下層も含めて
+  マージできない。最下層は下の検査を通るが GitHub が拒否し、422 `github_rejected` で返る。
+  native stack は GitHub 側でマージする。
 - 手で積んだ stack(base が別の PR の head)では、途中の層は trunk ではなく下の層の
-  branch へマージされる。下の層はその変更をレビューされないまま運ぶ。
+  branch へマージされる。下の層はその変更をレビューされないまま運ぶ。GitHub の通常の
+  挙動で、fixture での実測は行っていない。
 - どちらの形でも、下の層が未マージの間は途中の層のマージを 409 `stack_below_unmerged`
   で拒否する。判定は merge 直前の live 読み取りで行う。snapshot の `PRRef.Stack` は web の
   無効化理由にだけ使い、サーバの判定にも保持の解放にも使わない。

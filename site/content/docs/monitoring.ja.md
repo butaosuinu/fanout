@@ -235,6 +235,7 @@ GitHub が拒否した場合はその旨をエラーで表示し、PR は変わ�
 stack は下の層から順にマージします。GitHub の native stack では、ある層をマージするとその下の未マージの層もまとめてマージされます。手で積んだ PR は trunk ではなく下の層の branch へマージされます。
 そのため、下の層が未マージの間はボタンが無効になります。対象は GitHub native stack の下の層と、この PR の base を head に持つこの repository の open PR です。サーバはマージ前に GitHub で同じ条件を確かめ、ダッシュボードのどの行にも無い下の層も見ます。
 default branch は層として数えません。それ以外の長寿命 branch は層と同じに見えます。`develop` → `main` の release PR が open の間は、`develop` への PR もマージを待ちます。
+GitHub は native stack のどの層についても、最下層を含めてダッシュボードのマージ(`gh pr merge`)を拒否し、ボタンはその拒否を表示します。native stack は GitHub 上でマージしてください。
 
 **ブランチを削除**も、この repository の open PR がその branch を base にしている間は拒否します。手で積んだ stack の次の層です。GitHub の UI から branch を消すと、GitHub はその PR の base を付け替えます。API からの削除でも同じかは未確認で、付け替わらなければ GitHub はその PR を close します。
 
