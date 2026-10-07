@@ -164,7 +164,8 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
   asynchronous merge REST API.」で拒否し、何も変えなかった。途中の層への `merge-async` は、
   下の未マージの層と一緒に下から順に trunk へマージし、上の層は trunk へ自動で付け替わった。
 - ダッシュボードのマージは `gh pr merge` を使うので、native stack の層は最下層も含めて
-  マージできない。最下層は下の検査を通るが GitHub が拒否し、422 `github_rejected` で返る。
+  マージできない。web は native stack の層をすべて理由付きで無効化する。サーバは途中の層を
+  409 で拒否し、最下層は検査を通るが GitHub が拒否して 422 `github_rejected` で返る。
   native stack は GitHub 側でマージする。
 - 手で積んだ stack(base が別の PR の head)では、途中の層は trunk ではなく下の層の
   branch へマージされる。下の層はその変更をレビューされないまま運ぶ。GitHub の通常の
@@ -184,7 +185,8 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
 - stack の読み取りに失敗したら拒否する。他の PR を巻き込まないことを証明できない
   merge は撃たない。例外は schema に stack のフィールドが無い応答(`undefinedField`)で、
   stack の無いサーバとして扱う。preview の改名も同じに見えるが、native stack の途中層は
-  下の層の head を base にするので、手積みの検査が拒否する。
+  下の層の head を base にするので、下の層が open なら手積みの検査が拒否する。下の層が
+  close 済みでそれを通っても、GitHub が stacked PR の `gh pr merge` を拒否する(実測)。
 - default branch 以外の長寿命 branch を base にする PR も塞ぐ。`develop` → `main` の
   release PR が open の間は、`develop` へのマージが止まる。GitHub 上で stack の層と区別
   できないため。

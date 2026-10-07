@@ -282,7 +282,7 @@ describe("無効化", () => {
     { name: "draft", pr: { isDraft: true }, reason: /draft PR/ },
     { name: "conflicting", pr: { mergeable: "CONFLICTING" }, reason: /競合しています/ },
     {
-      name: "stack の下の層が未マージ",
+      name: "native stack の層",
       pr: {
         stack: {
           number: 9,
@@ -295,7 +295,7 @@ describe("無効化", () => {
           ],
         },
       },
-      reason: /下の層 #700 が未マージ/,
+      reason: /native stack の層はダッシュボードからマージできません/,
     },
   ];
 

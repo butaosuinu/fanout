@@ -145,6 +145,10 @@ msgstr "(no plan found — none proposed yet, or it has scrolled out of view)"
 msgid "このダッシュボードは merge を実行できません"
 msgstr "This dashboard cannot run merges"
 
+#: src/features/merge/merge.ts
+msgid "GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)"
+msgstr "Layers of a GitHub-native stack cannot be merged from the dashboard (merge them on GitHub)"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "言語"
 msgstr "Language"

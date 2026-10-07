@@ -75,6 +75,12 @@ describe("mergeBlockReason", () => {
     expect(mergeBlockReason(makePr({ ci: "fail" }), OK)).toBeNull();
   });
 
+  /* GitHub は native stack の層への gh pr merge を最下層も含めて拒否する(実測)。 */
+  it("native stack の層は最下層でも塞ぐ", () => {
+    const stack = { number: 9, size: 2, baseRef: "main", position: 1 };
+    expect(mergeBlockReason(makePr({ stack }), OK)?.message).toMatch(/GitHub でマージ/);
+  });
+
   it("下の層が未マージなら、PR 自体の理由の後に塞ぐ", () => {
     expect(mergeBlockReason(makePr(), { ...OK, below: 700 })?.values).toEqual({ pr: 700 });
     expect(mergeBlockReason(makePr({ isDraft: true }), { ...OK, below: 700 })?.message).toBe(
@@ -244,6 +250,12 @@ describe("mergeTargetPr", () => {
 
   /* 上の層を選ぶと唯一のボタンが下の層を待って無効になり、マージできる下の層に
    * 届かない。 */
+  it("native stack の層より stack 外の open を先に採る", () => {
+    const stack = { number: 9, size: 2, baseRef: "main", position: 1 };
+    const prs = [makePr({ number: 700, stack }), makePr({ number: 701 })];
+    expect(mergeTargetPr(prs, { repo: REPO, branch: "", others: prs })?.number).toBe(701);
+  });
+
   it("stack の上下 2 層を持つ行では下の層を先に採る", () => {
     const prs = [
       makePr({ number: 701, baseRef: "fanout/lower" }),

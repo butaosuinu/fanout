@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/table"
 
@@ -337,7 +336,7 @@ func prCell(summary string, width int) string {
 		return truncate(summary, width)
 	}
 	tag := stackTagSep + pos
-	return truncate(head, width-utf8.RuneCountInString(tag)) + tag
+	return truncateCells(head, width-cellWidth(tag)) + tag
 }
 
 func (p paneView) itemLabel() string {

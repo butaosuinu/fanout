@@ -145,6 +145,10 @@ msgstr "(plan が見つかりません — まだ提案されていないか、�
 msgid "このダッシュボードは merge を実行できません"
 msgstr "このダッシュボードは merge を実行できません"
 
+#: src/features/merge/merge.ts
+msgid "GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)"
+msgstr "GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "言語"
 msgstr "言語"

@@ -74,7 +74,7 @@ function chainLayerBelow(pr: PRRef, others: readonly PRRef[], repo: string): num
  * draft や CONFLICTING だとそれだけが選ばれて唯一のボタンが永久に無効になる。 */
 function actionable(pr: PRRef): boolean {
   if (!isOpen(pr) || pr.isDraft || pr.mergeable === "CONFLICTING") return false;
-  return !pr.autoMerge && !pr.queued;
+  return !pr.autoMerge && !pr.queued && !pr.stack;
 }
 
 /* サーバの VerifyRowOwns と同じ所有権規則。ここで揃えないと、行に載った他人の
@@ -122,6 +122,12 @@ const PR_BLOCKS: { when: (pr: PRRef) => boolean; reason: MessageDescriptor }[] =
   {
     when: (pr) => !!pr.autoMerge || !!pr.queued,
     reason: msg`GitHub がこの PR のマージを保留中です`,
+  },
+  /* GitHub は native stack の層への `gh pr merge` を、最下層も含めて拒否する
+   * (2026-10-06 実測。async merge API を使えと返す)。押しても必ず 422 になる。 */
+  {
+    when: (pr) => !!pr.stack,
+    reason: msg`GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)`,
   },
 ];
 

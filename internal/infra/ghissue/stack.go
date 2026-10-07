@@ -117,9 +117,11 @@ func (r Runner) PRStacks(owner, repo string, nums []int) (map[int]*PRStack, erro
 //
 // The one error read as "no stack" is a schema without the fields. A server
 // whose schema has no stack (a GitHub Enterprise Server without the preview,
-// say) has no native stacks, and refusing there would stop every merge. A renamed preview reads the same
-// way; a mid-stack layer then still heads its base from the layer below, which
-// the merge's chain fence refuses on stable fields.
+// say) has no native stacks, and refusing there would stop every merge. A
+// renamed preview reads the same way. A mid-stack layer whose lower layer is
+// still open then heads its base from it, which the chain fence refuses on
+// stable fields; past that, GitHub itself refuses `gh pr merge` for every
+// stacked pull request (observed 2026-10-06).
 func (r Runner) PRStack(ctx context.Context, owner, repo string, number int) (_ *PRStack, err error) {
 	defer errs.Wrap(&err, "read stack of pull request #%d", number)
 

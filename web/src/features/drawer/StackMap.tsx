@@ -86,7 +86,7 @@ function StackLayerRow({
       {layer.owners.length > 0 && (
         <span className="muted">
           {layer.owners.map((o, i) => (
-            <Fragment key={`${o.paneId}:${paneLabel(o)}:${o.slug}`}>
+            <Fragment key={`${i}:${paneLabel(o)}`}>
               {i > 0 && ", "}
               <button
                 type="button"
