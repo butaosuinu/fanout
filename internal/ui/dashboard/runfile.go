@@ -106,7 +106,11 @@ func (rf *RunFile) IsLive() bool {
 		return false
 	}
 	healthURL := (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: healthzPath}).String()
-	client := http.Client{Timeout: 300 * time.Millisecond}
+	client := http.Client{
+		Timeout: 300 * time.Millisecond,
+		// A loopback endpoint must not redirect the probe to an arbitrary host.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	resp, err := client.Get(healthURL)
 	if err != nil {
 		return false

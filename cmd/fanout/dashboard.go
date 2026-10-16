@@ -58,6 +58,7 @@ var (
 
 type dashboardFlags struct {
 	port      int
+	list      bool
 	open      bool
 	noToken   bool
 	noKeybind bool
@@ -71,7 +72,7 @@ func isDashboardRequest(args []string) bool {
 
 // cmdDashboard starts the localhost web dashboard. It accepts --web
 // (the only mode today; a no-op kept for forward-compat with a future --tui),
-// --port, --open, --no-token, and --no-keybind.
+// --port, --open, --no-token, and --no-keybind, or --list on its own.
 //
 //nolint:gocognit,gocyclo,funlen // Dashboard startup is one ordered lock, run-file, server, health, and shutdown transaction.
 func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
@@ -84,6 +85,13 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 	flags, code := parseDashboardFlags(args, lg)
 	if code != exitcode.OK {
 		return code
+	}
+	if flags.list {
+		if len(args) != 1 {
+			lg.Err("dashboard: --list cannot be combined with server options")
+			return exitcode.Invocation
+		}
+		return listDashboards(lg)
 	}
 
 	root, err := dashboardProjectRoot()
@@ -154,12 +162,13 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 	}
 	url := srv.URL()
 
-	if err := dashboard.WriteRunFile(root, dashboard.RunFile{
+	rf := dashboard.RunFile{
 		URL:       url,
 		PID:       os.Getpid(),
 		Token:     token,
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
+	}
+	if err := dashboard.WriteRunFile(root, rf); err != nil {
 		lg.Warn("dashboard: write run file: %v", err)
 	}
 	defer func() {
@@ -178,6 +187,15 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 	// of binding a duplicate. The browser-open and keybind steps below can take
 	// longer than the probe timeout, so they must happen after the release.
 	waitDashboardHealthy(srv.HealthURL())
+	if unregister, err := dashboard.RegisterDashboard(root, rf); err != nil {
+		lg.Warn("dashboard: %v", err)
+	} else {
+		defer func() {
+			if err := unregister(); err != nil {
+				lg.Warn("dashboard: unregister: %v", err)
+			}
+		}()
+	}
 	releaseStartup()
 
 	lg.Ok("dashboard: %s", url)
@@ -276,6 +294,8 @@ func parseDashboardFlags(args []string, lg *log.Logger) (dashboardFlags, exitcod
 	f := dashboardFlags{port: 0}
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
+		case "--list":
+			f.list = true
 		case "--web":
 			// only mode today; explicit no-op
 		case "--open":
@@ -303,6 +323,19 @@ func parseDashboardFlags(args []string, lg *log.Logger) (dashboardFlags, exitcod
 		}
 	}
 	return f, exitcode.OK
+}
+
+func listDashboards(lg *log.Logger) exitcode.Code {
+	entries, err := dashboard.ListDashboards()
+	if err != nil {
+		lg.Err("dashboard: %v", err)
+		return exitcode.Env
+	}
+	fmt.Fprintln(lg.Stdout(), "PID\tURL\tPROJECT ROOT")
+	for _, entry := range entries {
+		fmt.Fprintf(lg.Stdout(), "%d\t%s\t%q\n", entry.PID, entry.URL, entry.ProjectRoot)
+	}
+	return exitcode.OK
 }
 
 func parsePort(s string) (int, error) {
@@ -544,6 +577,7 @@ func dashboardMergePort(root string) func(context.Context, prmerge.Request) (prm
 }
 
 const dashboardUsage = `Usage: fanout dashboard [--web] [--port N] [--open] [--no-token] [--no-keybind]
+       fanout dashboard --list
 
 Start a localhost web dashboard that visualizes fanout Sessions (panes grouped
 by parent issue) live: pane liveness, issue state, and PR merge status. The
@@ -553,6 +587,8 @@ that PR's remote branch. It never changes your working tree, local branches,
 worktrees, or panes.
 
 Options:
+  --list          List live dashboards across repositories without access tokens.
+                  Works outside a repository; cannot be combined with server options.
   --web           Web dashboard mode (default; reserved for a future --tui).
   --port N        TCP port to bind on 127.0.0.1. Default 0 (OS-assigned).
   --open          Open the dashboard URL in the default browser.
