@@ -145,9 +145,17 @@ msgstr "(no plan found — none proposed yet, or it has scrolled out of view)"
 msgid "このダッシュボードは merge を実行できません"
 msgstr "This dashboard cannot run merges"
 
+#: src/features/merge/merge.ts
+msgid "GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)"
+msgstr "Layers of a GitHub-native stack cannot be merged from the dashboard (merge them on GitHub)"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "言語"
 msgstr "Language"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "#{pr} がこの branch を base にしているため削除できません"
+msgstr "Cannot delete: #{pr} uses this branch as its base"
 
 #: src/app/App.tsx
 msgid "アクティブなセッションがありません"
@@ -388,6 +396,10 @@ msgstr "GitHub state is unavailable"
 msgid "バイナリのため patch なし"
 msgstr "no patch — binary"
 
+#: src/features/drawer/StackMap.tsx
+msgid "この行の詳細を開く"
+msgstr "Open this row's details"
+
 #: src/features/merge/DeleteBranchButton.tsx
 msgid "ブランチを削除できませんでした(接続エラー)"
 msgstr "Could not delete the branch (connection error)"
@@ -425,6 +437,10 @@ msgstr "Reload"
 #: src/features/diff/diff.ts
 msgid "レビュー対象が patch に揃っていません — patch は不完全です"
 msgstr "The patch does not cover everything under review — it is incomplete"
+
+#: src/features/merge/merge.ts
+msgid "下の層 #{pr} が未マージです(下の層からマージしてください)"
+msgstr "Lower layer #{pr} is not merged yet (merge from the bottom up)"
 
 #: src/features/merge/merge.ts
 #: src/features/sessions/badges.tsx
@@ -594,6 +610,10 @@ msgstr "Summary"
 #: src/features/diff/DiffBody.tsx
 msgid "patch のあるファイルはすべて確認済みです"
 msgstr "Every file with a patch is viewed"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "ブランチを削除 — {reason}"
+msgstr "Delete branch — {reason}"
 
 #: src/features/filter/FilterDropdown.tsx
 msgid "{key} の選択肢を検索"

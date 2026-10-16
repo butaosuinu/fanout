@@ -7,7 +7,7 @@ import { usePeek } from "../../transport/usePeek";
 import { usePlan } from "../../transport/usePlan";
 import { fmtCreated, parseDiff } from "../../shared/format";
 import { issueUrl } from "../../shared/github";
-import { canDeleteBranch } from "../merge/merge";
+import { canDeleteBranch, prBasedOn } from "../merge/merge";
 import { DeleteBranchButton } from "../merge/DeleteBranchButton";
 import { MergeSplitButton } from "../merge/MergeSplitButton";
 import { useMergeSlot } from "../merge/MergeSlot";
@@ -123,8 +123,14 @@ function WaveSection({ pane, repo }: { pane: PaneView; repo: string }) {
   );
 }
 
-/* マージ後の後片付け導線。出せる行にだけ渡る。 */
-type Cleanup = { query: Record<string, string>; token: string; branch: string } | null;
+/* マージ後の後片付け導線。出せる行にだけ渡る。others は snapshot にあるこの repository
+ * の PR で、削除ボタンの無効化(prBasedOn)に使う。 */
+type Cleanup = {
+  query: Record<string, string>;
+  token: string;
+  branch: string;
+  others: readonly PRRef[];
+} | null;
 
 /* ドロワーの PR 1 件ぶんの信号。タグはどれも該当しなければ null を返すので、ここに
  * 条件分岐は置かない。区切りの空白は不要 — .d-prs li が flex + gap を持っている。
@@ -143,6 +149,7 @@ function PrSignals({ pr, repo, cleanup }: { pr: PRRef; repo: string; cleanup: Cl
           pr={pr}
           query={cleanup.query}
           token={cleanup.token}
+          blockedBy={prBasedOn(pr, cleanup.others)}
         />
       )}
     </>
@@ -163,7 +170,8 @@ function PrsSection({
   const stacks = useStackIndex();
   const groups = groupPrs(pane.prs ?? [], stacks);
   const query = rowQuery(parent, pane);
-  const cleanup = query ? { query, token, branch: pane.branchName ?? "" } : null;
+  const others = [...stacks.prs.values()].map((hit) => hit.pr);
+  const cleanup = query ? { query, token, branch: pane.branchName ?? "", others } : null;
   const renderOwn = (pr: PRRef) => <PrSignals pr={pr} repo={repo} cleanup={cleanup} />;
   return (
     <section className="d-sec">

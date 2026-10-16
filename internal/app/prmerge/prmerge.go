@@ -36,6 +36,8 @@ var (
 	ErrForeignPR     = errors.New("pull request does not belong to this session row")
 	ErrNotMerged     = errors.New("pull request is not merged")
 	ErrBranchInUse   = errors.New("another open pull request still uses this branch")
+	ErrStackBelow    = errors.New("a lower layer of this stacked pull request is not merged")
+	ErrBranchIsBase  = errors.New("an open pull request is based on this branch")
 )
 
 // VerifyRowOwns rejects a pull request the row does not actually own.
@@ -208,7 +210,10 @@ func PlanDelete(pv sessionview.PaneView, ref ghissue.PRRef, repo string) (string
 type Port interface {
 	MergePR(ctx context.Context, req ghissue.MergePRRequest) error
 	PRState(ctx context.Context, owner, repo string, number int) (ghissue.PRTarget, error)
+	PRStack(ctx context.Context, owner, repo string, number int) (*ghissue.PRStack, error)
 	OpenPRNumbersForHead(ctx context.Context, owner, repo, branch string) ([]int, error)
+	OpenPRNumbersForBase(ctx context.Context, owner, repo, branch string) ([]int, error)
+	OpenPRNumbersFromBranch(ctx context.Context, owner, repo, branch string) ([]int, error)
 	DeleteRemoteBranch(ctx context.Context, owner, repo, branch, expectedOID string) error
 }
 
@@ -328,10 +333,81 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 	if err := req.Row.stillOwns(live, req.Owner+"/"+req.Repo, req.Number); err != nil {
 		return err
 	}
-	return RenderedRef{HeadSha: req.HeadSha, BaseRef: req.BaseRef}.check(ghissue.PRRef{
+	if err := (RenderedRef{HeadSha: req.HeadSha, BaseRef: req.BaseRef}).check(ghissue.PRRef{
 		HeadSha: live.HeadSha,
 		BaseRef: live.BaseRef,
-	})
+	}); err != nil {
+		return err
+	}
+	if err := s.fenceChain(ctx, req, live); err != nil {
+		return err
+	}
+	return s.fenceNativeStack(ctx, req)
+}
+
+// fenceChain refuses a layer of a stack built by hand while the layer below it
+// is open: this pull request's base is the head of another open pull request in
+// this repository. GitHub merges this one into that branch rather than the
+// trunk, and the layer below then carries it along unreviewed.
+//
+// The base is the live one, so a retarget since the snapshot is judged as it
+// stands, and only this repository's branch counts: a fork's pull request from
+// a branch of the same name is not a layer of anything here.
+//
+// The default branch is skipped. A stack is built on the trunk, never below it,
+// and an open pull request from the trunk (main synced into develop) would
+// otherwise refuse every merge into main. Any other long-lived branch with an
+// open pull request of its own (develop, while a release pull request into main
+// is open) is refused: from GitHub it looks the same as a stack layer.
+func (s Service) fenceChain(ctx context.Context, req Request, live ghissue.PRTarget) error {
+	base := live.BaseRef
+	if base == live.DefaultBranch {
+		return nil
+	}
+	below, err := s.GH.OpenPRNumbersFromBranch(ctx, req.Owner, req.Repo, base)
+	if err != nil {
+		return err
+	}
+	if len(below) > 0 {
+		return fmt.Errorf("%w: #%d heads %s, the base of #%d", ErrStackBelow, below[0], base, req.Number)
+	}
+	return nil
+}
+
+// fenceNativeStack refuses a layer of a GitHub-native stack while a layer below
+// it is unmerged. GitHub cannot merge a mid-stack pull request alone: the
+// unmerged layers below land with it, so the merge would stop being one pull
+// request.
+//
+// It reads the stack live rather than trusting the snapshot's copy, which is
+// display only and can be several waves old. A layer below that the read did
+// not return counts as unmerged — entries stop at one page, and "not seen" must
+// not pass as "merged". A failed read refuses: the preview schema can change,
+// and a merge that cannot rule out taking other pull requests with it does not
+// run. A schema with no stack fields at all reads as no stack (Runner.PRStack).
+func (s Service) fenceNativeStack(ctx context.Context, req Request) error {
+	stack, err := s.GH.PRStack(ctx, req.Owner, req.Repo, req.Number)
+	if err != nil || stack == nil || stack.Position <= 1 {
+		return err
+	}
+	var open []string
+	merged := 0
+	for _, e := range stack.Entries {
+		switch {
+		case e.Position >= stack.Position:
+		case e.PR.DisplayState() == "merged":
+			merged++
+		default:
+			open = append(open, fmt.Sprintf("#%d", e.PR.Number))
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("%w: %s below #%d in stack #%d", ErrStackBelow, strings.Join(open, ", "), req.Number, stack.Number)
+	}
+	if merged < stack.Position-1 {
+		return fmt.Errorf("%w: not every layer below #%d in stack #%d could be read", ErrStackBelow, req.Number, stack.Number)
+	}
+	return nil
 }
 
 // stillOwns re-checks the link that made this pull request the row's, against
@@ -427,9 +503,24 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 	if err = req.Row.stillOwns(live, req.Owner+"/"+req.Repo, req.Number); err != nil {
 		return err
 	}
-	// Two pull requests can share a head branch when they target different bases.
-	// Merging one does not finish the branch: deleting it here would leave the
-	// other one unmergeable, with its commits gone.
+	if err = s.branchInUse(ctx, req); err != nil {
+		return err
+	}
+	return s.GH.DeleteRemoteBranch(ctx, req.Owner, req.Repo, req.Branch, live.HeadSha)
+}
+
+// branchInUse refuses a branch another open pull request still needs.
+//
+// Two pull requests can share a head branch when they target different bases.
+// Merging one does not finish the branch: deleting it here would leave the
+// other one unmergeable, with its commits gone.
+//
+// An open pull request based on this branch is the next layer of a stack built
+// by hand (a native stack retargets it when the layer below merges). Whether
+// GitHub retargets it when the ref is deleted through the REST API, rather than
+// closing it, is unverified, so the delete does not find out — the policy #839
+// settled on, mirrored by the web's disabled Delete branch button.
+func (s Service) branchInUse(ctx context.Context, req DeleteRequest) error {
 	others, err := s.GH.OpenPRNumbersForHead(ctx, req.Owner, req.Repo, req.Branch)
 	if err != nil {
 		return err
@@ -439,7 +530,14 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 			return fmt.Errorf("%w: #%d", ErrBranchInUse, num)
 		}
 	}
-	return s.GH.DeleteRemoteBranch(ctx, req.Owner, req.Repo, req.Branch, live.HeadSha)
+	above, err := s.GH.OpenPRNumbersForBase(ctx, req.Owner, req.Repo, req.Branch)
+	if err != nil {
+		return err
+	}
+	if len(above) > 0 {
+		return fmt.Errorf("%w: #%d", ErrBranchIsBase, above[0])
+	}
+	return nil
 }
 
 // stillAddressed checks that the merged pull request GitHub reports is the one

@@ -285,6 +285,12 @@ func TestPRStateAsksGitHubRatherThanTrustingTheExitCode(t *testing.T) {
 			want: PRTarget{BaseRef: "main", HeadSha: "abc", Queued: true},
 		},
 		{
+			// The chain fence skips the trunk, so it is read with the pull request.
+			name: "reads the repository's default branch",
+			out:  `{"data":{"repository":{"defaultBranchRef":{"name":"main"},"pullRequest":{"state":"OPEN","baseRefName":"develop","headRefOid":"abc"}}}}`,
+			want: PRTarget{BaseRef: "develop", HeadSha: "abc", DefaultBranch: "main"},
+		},
+		{
 			name: "closing issues carry their repository",
 			out: prStateJSON(`"state":"OPEN","baseRefName":"main","headRefOid":"abc",` +
 				`"closingIssuesReferences":{"nodes":[{"number":578,"repository":{"nameWithOwner":"o/r"}}]}`),
@@ -496,6 +502,67 @@ func TestOpenHeadNumbers(t *testing.T) {
 		out := []byte("[" + strings.Join(rows, ",") + "]")
 		if _, err := openHeadNumbers(out, "o", "r", "fanout/foo"); err == nil {
 			t.Fatal("openHeadNumbers() error = nil, want the truncation refusal")
+		}
+	})
+}
+
+// TestOpenPRNumbersForBase pins the query behind the delete's base check: OPEN
+// pull requests based on the branch, every listed row counted.
+func TestOpenPRNumbersForBase(t *testing.T) {
+	argsPath := installFakeGH(t, `[{"number":12},{"number":15}]`)
+	got, err := (Runner{}).OpenPRNumbersForBase(context.Background(), "o", "r", "fanout/foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{12, 15}; !slices.Equal(got, want) {
+		t.Fatalf("OpenPRNumbersForBase() = %v, want %v", got, want)
+	}
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"-R\no/r\n", "--base\nfanout/foo\n", "--state\nopen\n"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("OpenPRNumbersForBase() args = %q, missing %q", data, want)
+		}
+	}
+}
+
+// TestOpenPRNumbersFromBranch pins the chain fence's query: the REST head
+// filter in owner:branch form, which leaves forks' same-named branches out.
+func TestOpenPRNumbersFromBranch(t *testing.T) {
+	// The same owner can hold another repository with the same branch name;
+	// only this repository's branch is a layer here.
+	argsPath := installFakeGH(t, `[{"number":6,"head":{"label":"o:fanout/lower","repo":{"full_name":"O/R"}}},`+
+		`{"number":8,"head":{"label":"o:fanout/lower","repo":{"full_name":"o/r-mirror"}}},`+
+		`{"number":9,"head":{"label":"o:fanout/lower","repo":null}}]`)
+	got, err := (Runner{}).OpenPRNumbersFromBranch(context.Background(), "o", "r", "fanout/lower")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{6}; !slices.Equal(got, want) {
+		t.Fatalf("OpenPRNumbersFromBranch() = %v, want %v", got, want)
+	}
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--method\nGET\n", "repos/o/r/pulls\n", "head=o:fanout/lower\n", "state=open\n"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("OpenPRNumbersFromBranch() args = %q, missing %q", data, want)
+		}
+	}
+
+	// A full page can hide this repository's row on the next one; an empty
+	// answer would let the merge through.
+	t.Run("refuses a page that may be truncated", func(t *testing.T) {
+		rows := make([]string, openHeadListLimit)
+		for i := range rows {
+			rows[i] = fmt.Sprintf(`{"number":%d,"head":{"repo":{"full_name":"o/r-mirror"}}}`, i+1)
+		}
+		installFakeGH(t, "["+strings.Join(rows, ",")+"]")
+		if _, err := (Runner{}).OpenPRNumbersFromBranch(context.Background(), "o", "r", "fanout/lower"); err == nil {
+			t.Fatal("OpenPRNumbersFromBranch() error = nil, want the truncation refusal")
 		}
 	})
 }

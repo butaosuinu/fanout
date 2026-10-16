@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
@@ -88,6 +90,43 @@ func TestPaneViewRuntimeActionsRequireSupportedBackend(t *testing.T) {
 			}
 			if got := pane.canPeek(); got != tc.want {
 				t.Fatalf("canPeek() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTableRowKeepsTheStackTag pins the PR column as rendered: a long review
+// state gives way before the stack position does.
+func TestTableRowKeepsTheStackTag(t *testing.T) {
+	stacked := func(number int, decision string, pos, size int) []ghissue.PRRef {
+		return []ghissue.PRRef{{
+			Number: number, State: "OPEN", ReviewDecision: decision,
+			Stack: &ghissue.PRStack{Position: pos, Size: size},
+		}}
+	}
+	tests := []struct {
+		name string
+		prs  []ghissue.PRRef
+		want string
+	}{
+		{name: "a short state fits whole", prs: stacked(844, "", 2, 3), want: "#844 open ⧉ 2/3"},
+		{name: "a review state gives way to the position", prs: stacked(844, "APPROVED", 2, 3), want: "#844 ap... ⧉ 2/3"},
+		{
+			name: "the longest state with a two-digit size",
+			prs:  stacked(1234, "CHANGES_REQUESTED", 10, 12),
+			want: "#1234... ⧉ 10/12",
+		},
+		{
+			name: "a pull request in no stack truncates as before",
+			prs:  []ghissue.PRRef{{Number: 844, State: "OPEN", ReviewDecision: "REVIEW_REQUIRED"}},
+			want: "#844 review-r...",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := paneView{PRSummary: summarizePRs(tt.prs)}.tableRow()
+			if got := row[columnIndex(t, "PR")]; got != tt.want {
+				t.Fatalf("PR cell = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -174,7 +174,8 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   サーバが snapshot 行の PR 集合との一致を確認し、GitHub 側が
   `--match-head-commit` で再確認する 3 段照合を必ず通す — どれか 1 段を外すと
   「画面で見ていた PR と実際にマージされる PR が違う」窓が開く。merged /
-  closed / draft / CONFLICTING は fanout が 409 で弾くが、レビュー承認と CI は
+  closed / draft / CONFLICTING と、下の層が未マージの stack の途中層は fanout が
+  409 で弾くが、レビュー承認と CI は
   弾かない(branch protection の強制は GitHub の役目で、二重実装すると保護
   ルールの無い repo でボタンが永久に死ぬ)。POST の入口は `postOnly` +
   `sameOriginOnly`(`Host` の完全一致で DNS rebinding を塞ぐ / `Origin` は存在時

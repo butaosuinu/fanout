@@ -341,7 +341,7 @@ function Dashboard() {
   };
 
   return (
-    <StackIndexProvider snap={snap}>
+    <StackIndexProvider snap={snap} onSelect={setSelected}>
       <Nav
         repo={repo}
         projectRoot={snap?.projectRoot ?? ""}

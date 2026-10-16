@@ -170,6 +170,15 @@ export function findPaneEntry(
   return null;
 }
 
+/* pane を載せている行のキー。stack map は snapshot の pane そのものを持つので、
+ * 同じ object を載せている session から parent を引く。 */
+export function rowKeyOf(snap: Snapshot | null, pane: PaneView): string | null {
+  for (const s of snap?.sessions ?? []) {
+    if ((s.panes ?? []).includes(pane)) return rowKey(String(s.parent ?? ""), pane);
+  }
+  return null;
+}
+
 /* 行 identity クエリ(正は docs/local-diff-review-tools.ja.md)。/api/diff と
  * /api/pr/merge が同じ形を使う。rowKey と同じ識別規則ファミリー — 行種が
  * 増えたらここ 1 箇所を直せば両方に効く。
