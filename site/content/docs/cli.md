@@ -324,18 +324,41 @@ where fanout has equivalent data.
 
 ```text
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
+fanout dashboard --list
 ```
 
 Starts the localhost web dashboard: bound to `127.0.0.1`, token-gated, visualizing fanout Sessions (the recorded panes grouped by parent) with live pane liveness, issue state and PR merge status. Reads are GET-only; the one thing it can change is merging a pull request on GitHub from the Merge button, which never touches your working tree, local branches, or worktrees.
 
 | Flag | Argument | Description |
 |---|---|---|
+| `--list` | — | List registered live dashboards across repositories as PID, token-free URL, and quoted project root. Works outside a repository; cannot be combined with server options. |
 | `--port` | `N` | Port to bind. Default: `0` (an OS-assigned ephemeral port); the chosen URL is printed. |
 | `--open` | — | Open the URL in the default browser. Reuses a server that is already running (recorded in `.fanout/dashboard.json`) instead of starting a second one. |
 | `--no-token` | — | Drop the random per-start token that gates `/api/*`. For single-user machines. |
 | `--no-keybind` | — | Skip registering runtime dashboard shortcuts when the dashboard starts. Existing bindings stay unchanged. |
 
 Run `fanout dashboard --help` for the full flag list.
+
+Each new server registers in `$XDG_CONFIG_HOME/fanout/dashboards/`, or
+`~/.config/fanout/dashboards/` when `XDG_CONFIG_HOME` is unset. The config directory
+must be absolute. Each launch writes its own randomly named `.json` file with
+mode `0600` through `atomicfs`; graceful shutdown removes only that file.
+The record has four fields:
+
+```json
+{"projectRoot":"/absolute/repo","url":"http://127.0.0.1:8787/","pid":12345,"startedAt":"2026-10-17T00:00:00Z"}
+```
+
+`projectRoot` identifies the repository; `url` never contains the access token.
+`pid` and the RFC 3339 `startedAt` describe the launch. These locators do not
+authorize process control. This directory is separate from the persistent
+repository registry planned in #313.
+
+Listing checks the PID and a loopback `/healthz` response without following
+redirects. Dead, malformed, and non-regular records are omitted; listing does not
+delete stale files. A registration failure prints a warning and leaves the
+dashboard running. Servers started before registry support must be stopped and
+started to appear in the list.
 
 ### `fanout focus-console`
 

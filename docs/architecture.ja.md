@@ -76,6 +76,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `dashboard`(`merge.go`) | mutation 経路(merge)。PR 特定・事前検証・gh 失敗のステータス写像 | H |
 | ui | `dashboard`(`deletebranch.go`) | mutation 経路(マージ後の head ref 削除)。所有権検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
+| ui | `dashboard`(`registry.go`) | ユーザーレベルの dashboard 登録・所有境界・生存検証 | H |
 | ui | `dashboard`(`diff.go`) | snapshot の安定 row identity で選んだ worktree diff の read-only 配信・request-wide 上限 | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane のみ。`plan.go` は plan mode かつ codex に限定) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
