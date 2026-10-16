@@ -9,6 +9,28 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.18.0 (2026-10-17)
+
+- With the herdr backend selected, bare `fanout` in a terminal now enters the owned session directly; its console can reopen after a cold restart when the saved launcher identity verifies.
+  Owned herdr panes can open the web dashboard with `F12`.
+  See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for setup and recovery limits.
+- Herdr cleanup rechecks a checkout after a dirty-file rejection, removes ignored-only files before worktree removal, and verifies attached agents sharing the checkout before closing them.
+  Plan cleanup can retire its own empty coordinator without closing other repository workspaces.
+  Ambiguous mutations still require reconciliation or manual cleanup.
+  See [herdr backend]({{< relref "/docs/herdr-backend" >}}).
+- The web dashboard shows stacked PR relationships in Session rows and the detail drawer.
+  Merge checks reject an unmerged lower layer; branch deletion rejects a branch still used as another open PR's base.
+  GitHub-native stack layers must be merged on GitHub.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- Agent state handling now orders Claude hook reports by sequence and subscribes Codex Plan Mode and team controllers to thread events.
+  The release bundles Codex's `session-retro` skill and updates `post-work-review` / `pr-watch` guidance to ground findings in the task's purpose, acceptance criteria, and approved non-goals.
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}).
+- tmux close operations preserve identity-field separators in the C locale, fixing false identity mismatches when closing a recorded pane.
+- The minimum Go toolchain is now 1.26.9, and `golang.org/x/text` is updated to v0.41.0.
+  Web dependencies also include security updates.
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.18.0)
+
 ## v0.17.0 (2026-08-21)
 
 - **fanout-owned herdr workflows.** The opt-in herdr backend now creates or adopts a repository-owned session, provisions its workspaces and worktrees, and launches issue, Project, plan, and watcher work through a verified non-shell path.
