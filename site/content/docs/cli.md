@@ -12,7 +12,7 @@ yomi: reference
 ```text
 fanout # start the persistent tmux console
 fanout <parent-issue|project-url>
-       [--agent <name|NUM=name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--agent <selection|NUM=selection>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
@@ -24,7 +24,7 @@ fanout <parent-issue|project-url>
        [--pr-visualization|--no-pr-visualization]
        [--dashboard-keybind|--no-dashboard-keybind]
        [--team]
-fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
+fanout plan <spec.json|plan-slug> [--agent <selection|task-id=selection>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--team] [--base-branch <branch>]
        [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
@@ -91,7 +91,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 
 | Flag | Argument | Description |
 |---|---|---|
-| `--agent` | `<name>` or `<NUM>=<name>` | Agent CLI to launch in child panes: `claude`, `codex`, or `opencode`. Required unless `FANOUT_AGENT` is set. A bare `--agent <name>` sets the default for every child; the repeatable `--agent <NUM>=<name>` form overrides one child issue (or Project item) by number, e.g. `--agent codex --agent 456=claude`. Each child resolves its agent from a matching per-target override first, then the global `--agent`, then `FANOUT_AGENT`. Unknown agents fail before pane creation, and live mode checks that the agent CLI is installed — but only for the agents actually selected this run. |
+| `--agent` | `<selection>` or `<NUM>=<selection>` | `selection` is `name[:model[:effort]]`; name is `claude`, `codex`, or `opencode`. A bare selection sets the child default, falling back to `FANOUT_AGENT` when omitted. Repeat `NUM=selection` to override a child issue (or Project item), e.g. `--agent codex:gpt-6-astra:medium --agent 456=claude:opus:xhigh`. Empty model/effort fields inherit from the bare selection with the same name. Syntax, agent names, and supported flags are checked before launch; model/effort values are left to the agent CLI. Live mode also checks that selected CLIs are installed. OpenCode accepts a model only. Codex Plan/team lanes reject model/effort overrides until #791. |
 | `--backend` | `<tmux\|herdr>` | Runtime backend for this run. Default: `tmux`. The [herdr backend]({{< relref "/docs/herdr-backend" >}}) launches issue and Project children in a repository-owned session, including Codex child Plan Mode through fanout's app-server controller. A parent with recorded panes keeps its recorded backend; a conflicting override fails instead of mixing backends. |
 | `--session` | `<tmux-session>` | Target a named tmux session instead of the invoking pane. fanout itself must still be invoked from inside tmux. |
 | `--sleep` | `<seconds>` | Pause between successful pane creations. Default: `4`. A rate limit between launches, not a retry knob. |
@@ -159,7 +159,7 @@ generated branches use `fanout/<slug>` unless the task supplies `branch`.
 | `--backend` | `<tmux\|herdr>` | Runtime backend for this plan run. A plan whose `plan.source` names an issue shares that issue's backend binding; an issue-less plan is sticky per `plan:<slug>` in the current project's state. herdr launches tasks in its repository-owned session. |
 | `--team` | — | Opt the plan run into sibling coordination, exactly like issue mode — except peers are addressed by **task ID** (issue-less plan tasks have no `#N`). Seeds the plan's per-parent peer registry and appends the roster section to each task briefing. When the plan includes Codex team tasks, the registry preseed is fail-fast: a DB failure stops the run before any pane is created. The plan bus lives at `/tmp/fanout-<repo>-plan-<slug>.db`. tmux and herdr use the same preseed and cleanup path. Not combinable with the plan read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`). Off by default. |
 
-`--agent` works the same way as in issue mode, but per-target overrides are keyed by task ID instead of issue number: `--agent <name>` sets the default and the repeatable `--agent <task-id>=<name>` form overrides a single task. Each task resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT`.
+`--agent` uses the same `name[:model[:effort]]` selection as issue mode, with task IDs in place of issue numbers: `--agent <selection>` sets the default and repeatable `--agent <task-id>=<selection>` overrides one task. Empty fields inherit from the bare selection only when the agent name matches.
 
 ```bash
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run

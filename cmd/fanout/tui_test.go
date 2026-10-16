@@ -33,6 +33,38 @@ import (
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
+func TestTUIModelEffortSelectionBoundaries(t *testing.T) {
+	const raw = "codex:gpt-6-astra:xhigh"
+	t.Setenv("FANOUT_AGENT", raw)
+	installFakeExecutable(t, "codex")
+	if got := defaultTUIAgent(); got != raw {
+		t.Fatalf("default agent = %q", got)
+	}
+	if err := validateTUIAgentSelection(raw, map[string]string{"2": "claude:opus:high"}); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	t.Setenv("FANOUT_NEW_SESSION_PLAN_MODE", "false")
+	cfg, err := newSessionConfigForTUIAgent(root, raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range []panelaunch.Request{
+		newPlanPromptPaneRequest(root, state.Store{}, hooks.EmptyConfig(), "inspect", cfg, "key"),
+		newIssuePlanPaneRequest(root, state.Store{}, hooks.EmptyConfig(), ghissue.Issue{Number: 1}, cfg, raw, "key"),
+		panelaunch.NewManualRequest(cfg, root, state.Store{}, hooks.EmptyConfig(), manualPaneOptionsForTUI("inspect", cfg.Agent)),
+		newAttachedPaneRequest(cfg, root, state.Store{}, hooks.EmptyConfig(), "inspect", root, fanouttui.AttachTarget{}),
+	} {
+		if req.Agent != "codex" || req.Selection().String() != raw {
+			t.Errorf("selection lost at TUI request: %+v", req)
+		}
+	}
+	t.Setenv("FANOUT_NEW_SESSION_PLAN_MODE", "true")
+	if _, err := newSessionConfigForTUIAgent(root, raw, nil); err == nil || !strings.Contains(err.Error(), "#791") {
+		t.Fatalf("Plan selection error = %v", err)
+	}
+}
+
 func TestMain(m *testing.M) {
 	// A developer shell inside a fanout console exports the hand-off name;
 	// left set, any cmdTUI-driving test would exec that shell mid-run through
@@ -1758,7 +1790,10 @@ func TestManualPaneOptionsForTUILongSingleLineUsesBriefingBody(t *testing.T) {
 		t.Fatalf("long prompt body length = %d, want %d", len(opts.Body), len(prompt))
 	}
 
-	cfg := newSessionConfigForTUIAgent(t.TempDir(), "codex", nil)
+	cfg, cfgErr := newSessionConfigForTUIAgent(t.TempDir(), "codex", nil)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
 	cfg.DryRun = true
 	req := panelaunch.NewManualRequest(cfg, t.TempDir(), state.Store{}, hooks.EmptyConfig(), opts)
 	if req.BriefingPath == "" || !strings.Contains(req.BriefingBody, prompt) {
@@ -1782,7 +1817,10 @@ func TestNewSessionConfigForTUIAgentReloadsPlanMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	codex := newSessionConfigForTUIAgent(root, "codex", nil)
+	codex, cfgErr := newSessionConfigForTUIAgent(root, "codex", nil)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
 	if codex.Agent != "codex" || codex.PlanMode == nil || codex.PlanModeEnabled() {
 		t.Fatalf("codex config = %+v, want explicit non-plan mode", codex)
 	}
@@ -1791,7 +1829,10 @@ func TestNewSessionConfigForTUIAgentReloadsPlanMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, agentName := range []string{"claude", "codex", "opencode"} {
-		cfg := newSessionConfigForTUIAgent(root, agentName, nil)
+		cfg, cfgErr := newSessionConfigForTUIAgent(root, agentName, nil)
+		if cfgErr != nil {
+			t.Fatal(cfgErr)
+		}
 		if cfg.Agent != agentName || !cfg.PlanModeEnabled() {
 			t.Fatalf("%s config = %+v, want reloaded plan mode", agentName, cfg)
 		}
@@ -2117,7 +2158,10 @@ func TestLaunchAttachedAgentFromTUIRecordsStateInSourceRoot(t *testing.T) {
 
 func TestNewAttachedPaneRequestUsesParentScopedBriefingPath(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
-	cfg := newSessionConfigForTUIAgent(repo, "claude", nil)
+	cfg, cfgErr := newSessionConfigForTUIAgent(repo, "claude", nil)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
 	prompt := "inspect this worktree\nthen report"
 
 	first := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), prompt, filepath.Join(repo, ".fanout", "worktrees", "child"), fanouttui.AttachTarget{
@@ -2150,7 +2194,10 @@ func TestNewAttachedPaneRequestUsesParentScopedBriefingPath(t *testing.T) {
 
 func TestNewAttachedPaneRequestKeepsSourceTaskOutOfStateIdentity(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
-	cfg := newSessionConfigForTUIAgent(repo, "claude", nil)
+	cfg, cfgErr := newSessionConfigForTUIAgent(repo, "claude", nil)
+	if cfgErr != nil {
+		t.Fatal(cfgErr)
+	}
 
 	got := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), "inspect", filepath.Join(repo, ".fanout", "worktrees", "task"), fanouttui.AttachTarget{
 		TargetPath:       filepath.Join(repo, ".fanout", "worktrees", "task"),

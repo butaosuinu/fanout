@@ -184,6 +184,11 @@ Fan-out runs need a child agent — pass `--agent claude` / `--agent codex` /
 `--agent opencode` or set
 `FANOUT_AGENT`; the status, dashboard, and lifecycle commands (`--status`,
 `dashboard`, `--merge`) don't.
+Use `name[:model[:effort]]` in `--agent` and `FANOUT_AGENT`, for example
+`--agent 124=claude:opus:xhigh` or `--agent codex:gpt-6-astra:medium`.
+Empty fields inherit from the same agent's bare selection. Saved selections are
+reapplied on restore. OpenCode accepts a model only; Codex Plan/team lanes reject
+model/effort overrides until [#791](https://github.com/butaosuinu/fanout/issues/791).
 The [full CLI reference](https://butaosuinu.github.io/fanout/docs/cli/) documents
 every flag, environment variable, and exit code.
 

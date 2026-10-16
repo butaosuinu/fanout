@@ -727,8 +727,8 @@ func defaultTUIAgent() string {
 
 func tuiAgentOrDefault(agentName string) string {
 	name := strings.TrimSpace(agentName)
-	if agent.ValidateKnown(name) == nil {
-		return name
+	if selection, err := agent.ParseSelection(name); err == nil {
+		return selection.String()
 	}
 	return "claude"
 }

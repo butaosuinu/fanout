@@ -319,6 +319,42 @@ func TestHerdrResumeIntentRequiresExactCodexSessionAndArgv(t *testing.T) {
 	}
 }
 
+func TestHerdrResumeSelectionJournalRoundTrip(t *testing.T) {
+	repo := newLaunchJournalRepo(t)
+	_, journal := lockLaunchJournalForTest(t, repo)
+	intent := testResumeIntent()
+	intent.Launch.Model, intent.Launch.Effort = "gpt-6-astra", "medium"
+	intent.Launch.Args = []string{"--model", "gpt-6-astra", "-c", "model_reasoning_effort=medium", "resume", intent.ResumeAgentSession.Value}
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := saved.FindIntent(intent.ID)
+	if !found || got.Launch.Model != "gpt-6-astra" || got.Launch.Effort != "medium" || !slices.Equal(got.Launch.Args, intent.Launch.Args) {
+		t.Fatalf("selection round trip = %+v", got)
+	}
+	for _, mutate := range []func(*LaunchCapsule){
+		func(l *LaunchCapsule) { l.Model = "other" },
+		func(l *LaunchCapsule) { l.Effort = "low" },
+		func(l *LaunchCapsule) { l.Args[5] = "different-session" },
+		func(l *LaunchCapsule) { l.Args = append(l.Args, "--full-auto") },
+	} {
+		launch := *intent.Launch
+		launch.Args = slices.Clone(intent.Launch.Args)
+		mutate(&launch)
+		invalid := intent
+		invalid.Launch = &launch
+		journal.UpsertIntent(invalid)
+		if err := journal.Save(); err == nil {
+			t.Fatal("journal accepted noncanonical selection/session argv")
+		}
+	}
+}
+
 func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T) {
 	restart := testServerIntent(IntentRestart)
 	shutdown := testServerIntent(IntentShutdown)

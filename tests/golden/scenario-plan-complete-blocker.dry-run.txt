@@ -5,6 +5,7 @@
 [info] plan launch-plan: 2 task(s)
 [info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] api-client: Extract API client
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-plan-complete-blocker/project_root/.fanout/briefings/fanout-project_root-launch%2Dplan-api%2Dclient.md
   slug -> launch-plan-extract-api-client-api-client
   worktree -> <REPO>/tests/fixtures/scenario-plan-complete-blocker/project_root/.fanout/worktrees/launch-plan-extract-api-client-api-client

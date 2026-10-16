@@ -9,6 +9,7 @@ filtered out:
   #502 Bravo — not in --only
 
 [info] #501: Alpha
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-only/project_root/.fanout/briefings/fanout-project_root-501.md
   slug -> alpha-501
   worktree -> <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/alpha-501
@@ -33,6 +34,7 @@ filtered out:
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #501: dry-run complete
 [info] #503: Charlie
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-only/project_root/.fanout/briefings/fanout-project_root-503.md
   slug -> charlie-503
   worktree -> <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/charlie-503

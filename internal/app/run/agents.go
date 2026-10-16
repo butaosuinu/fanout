@@ -2,12 +2,24 @@ package run
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
+
+func resolveDefaultAgent(cfg *cliflags.Config) error {
+	if cfg.Agent == "" && os.Getenv("FANOUT_AGENT") != "" {
+		return cfg.SetAgent(os.Getenv("FANOUT_AGENT"))
+	}
+	if cfg.Agent == "" && len(cfg.AgentOverrides) == 0 {
+		return fmt.Errorf("agent is required; pass --agent <name> or set FANOUT_AGENT")
+	}
+	return nil
+}
 
 // validateIssueAgents checks the resolved agent for every issue target and
 // --limit-deferred issue. Deferred issues are validated for name/known-agent
@@ -18,15 +30,15 @@ func validateIssueAgents(cfg *cliflags.Config, issues, limitDeferred []ghissue.I
 		targets = append(targets, agentTarget{
 			Label:            fmt.Sprintf("#%d", issue.Number),
 			Target:           fmt.Sprintf("%d", issue.Number),
-			Name:             cfg.EffectiveAgentForIssue(issue.Number),
+			Selection:        cfg.EffectiveSelection(fmt.Sprint(issue.Number)),
 			RequireInstalled: true,
 		})
 	}
 	for _, issue := range limitDeferred {
 		targets = append(targets, agentTarget{
-			Label:  fmt.Sprintf("#%d", issue.Number),
-			Target: fmt.Sprintf("%d", issue.Number),
-			Name:   cfg.EffectiveAgentForIssue(issue.Number),
+			Label:     fmt.Sprintf("#%d", issue.Number),
+			Target:    fmt.Sprintf("%d", issue.Number),
+			Selection: cfg.EffectiveSelection(fmt.Sprint(issue.Number)),
 		})
 	}
 	return validateAgentTargets(cfg, targets)
@@ -39,15 +51,15 @@ func validateTaskAgents(cfg *cliflags.Config, tasks, limitDeferred []planspec.Ta
 		targets = append(targets, agentTarget{
 			Label:            task.ID,
 			Target:           task.ID,
-			Name:             cfg.EffectiveAgent(task.ID),
+			Selection:        cfg.EffectiveSelection(task.ID),
 			RequireInstalled: true,
 		})
 	}
 	for _, task := range limitDeferred {
 		targets = append(targets, agentTarget{
-			Label:  task.ID,
-			Target: task.ID,
-			Name:   cfg.EffectiveAgent(task.ID),
+			Label:     task.ID,
+			Target:    task.ID,
+			Selection: cfg.EffectiveSelection(task.ID),
 		})
 	}
 	return validateAgentTargets(cfg, targets)
@@ -56,25 +68,25 @@ func validateTaskAgents(cfg *cliflags.Config, tasks, limitDeferred []planspec.Ta
 type agentTarget struct {
 	Label            string
 	Target           string
-	Name             string
+	Selection        agent.Selection
 	RequireInstalled bool
 }
 
 func validateAgentTargets(cfg *cliflags.Config, targets []agentTarget) error {
-	seen := map[string]bool{}
+	seen := map[agent.Selection]bool{}
 	for _, target := range targets {
-		if target.Name == "" {
+		if target.Selection.Name == "" {
 			return fmt.Errorf("%s: agent is required; pass --agent <name>, --agent %s=<name>, or set FANOUT_AGENT", target.Label, target.Target)
 		}
-		if seen[target.Name] {
+		if seen[target.Selection] {
 			continue
 		}
-		seen[target.Name] = true
-		if err := agent.ValidateKnown(target.Name); err != nil {
+		seen[target.Selection] = true
+		if err := panelaunch.ValidateSelection(target.Selection, cfg.PlanModeEnabled(), cfg.Team); err != nil {
 			return err
 		}
 		if target.RequireInstalled && !cfg.DryRun {
-			if err := agent.ValidateInstalled(target.Name); err != nil {
+			if err := agent.ValidateInstalled(target.Selection.Name); err != nil {
 				return err
 			}
 		}

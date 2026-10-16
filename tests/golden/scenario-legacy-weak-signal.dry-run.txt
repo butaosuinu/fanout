@@ -6,6 +6,7 @@
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #601: First task
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/briefings/fanout-project_root-601.md
   slug -> first-task-601
   worktree -> <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/first-task-601
@@ -30,6 +31,7 @@
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #601: dry-run complete
 [info] #602: Second task
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/briefings/fanout-project_root-602.md
   slug -> second-task-602
   worktree -> <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/second-task-602

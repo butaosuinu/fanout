@@ -12,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/stateemitter"
 	"github.com/butaosuinu/fanout/internal/app/statusreport"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
@@ -75,7 +76,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	if code != exitcode.OK {
 		return code
 	}
-	cfg.Agent = cliCfg.Agent
+	cfg.Agent, cfg.Model, cfg.Effort = cliCfg.Agent, cliCfg.Model, cliCfg.Effort
 
 	_, code = run.PlanTasks(cfg, rt, lg, commandName, runtimeDashboardKeyBinder(rt))
 	return code
@@ -427,13 +428,15 @@ func parseTaskIDCSV(flag, csv string) ([]string, error) {
 }
 
 func parsePlanAgentArg(cfg *run.PlanCommandConfig, raw string) error {
-	if !strings.Contains(raw, "=") {
-		cfg.Agent = raw
+	target, name, override := strings.Cut(raw, "=")
+	if !override || strings.Contains(target, ":") {
+		selection, err := agent.ParseSelection(raw)
+		if err != nil {
+			return err
+		}
+		cfg.Agent, cfg.Model, cfg.Effort = selection.Name, selection.Model, selection.Effort
 		return nil
 	}
-	eq := strings.IndexByte(raw, '=')
-	target := raw[:eq]
-	name := raw[eq+1:]
 
 	if !rePlanTaskID.MatchString(target) {
 		return fmt.Errorf("--agent: <task-id> must be lowercase kebab-case, got: %s", target)
@@ -441,7 +444,11 @@ func parsePlanAgentArg(cfg *run.PlanCommandConfig, raw string) error {
 	if name == "" {
 		return fmt.Errorf("--agent %s: agent name must not be empty", target)
 	}
-	cfg.AgentOverrides = cliflags.UpsertAgentOverride(cfg.AgentOverrides, target, name)
+	selection, err := agent.ParseSelection(name)
+	if err != nil {
+		return err
+	}
+	cfg.AgentOverrides = cliflags.UpsertSelectionOverride(cfg.AgentOverrides, target, selection)
 	return nil
 }
 
@@ -581,8 +588,12 @@ func planTaskBranch(cfg run.PlanCommandConfig, spec planspec.Spec, task planspec
 const planUsage = `Usage: fanout plan <spec.json | plan-slug> [options]
 
 Options:
-  --agent <name|task-id=name> Agent to launch (or FANOUT_AGENT). Repeat for
-                              per-task overrides.
+  --agent <selection|task-id=selection>
+                              Agent (or FANOUT_AGENT): name[:model[:effort]].
+                              Repeat for per-task overrides; empty fields inherit
+                              from the same agent's bare selection. OpenCode has
+                              no effort flag. Codex Plan/team model/effort is not
+                              supported yet (#791).
   --backend <tmux|herdr>      Select the runtime backend
   --dry-run                   Print worktree/tmux/agent actions without launching
   --status                    Print task status and exit

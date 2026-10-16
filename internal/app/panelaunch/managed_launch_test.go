@@ -998,21 +998,29 @@ func TestValidateManagedLaunchBindingRejectsRequestChange(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	launcherPath := filepath.Join(binDir, "launcher", "fanout")
 	route := backend.OwnedLaunchRoute{LauncherPath: launcherPath, EmitterPath: launcherPath}
-	req := Request{Agent: "claude", Prompt: "original", LaunchMode: agent.ModeBuild}
+	req := Request{Agent: "claude", Model: "opus", Effort: "medium", Prompt: "original", LaunchMode: agent.ModeBuild}
 	spec, err := buildManagedLaunchSpecForRoute(req, route)
 	if err != nil {
 		t.Fatal(err)
 	}
 	launch := &state.LaunchCapsule{
 		Agent: req.Agent, Executable: spec.Executable, Args: spec.Args,
+		Model: req.Model, Effort: req.Effort,
 	}
 	if err := validateManagedLaunchBinding(req, launch, route); err != nil {
 		t.Fatalf("unchanged binding error = %v", err)
 	}
-	req.Prompt = "changed"
-	if err := validateManagedLaunchBinding(req, launch, route); err == nil ||
-		!strings.Contains(err.Error(), "current agent command") {
-		t.Fatalf("changed prompt binding error = %v", err)
+	for _, change := range []func(*Request){
+		func(r *Request) { r.Prompt = "changed" },
+		func(r *Request) { r.Model = "sonnet" },
+		func(r *Request) { r.Effort = "high" },
+	} {
+		changed := req
+		change(&changed)
+		if err := validateManagedLaunchBinding(changed, launch, route); err == nil ||
+			!strings.Contains(err.Error(), "current agent command") {
+			t.Fatalf("changed request binding error = %v", err)
+		}
 	}
 }
 

@@ -1021,7 +1021,10 @@ func TestTUIIssueLaunchConfigCarriesAgentSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := tuiIssueLaunchConfig(42, tt.defaultAgent, tt.overrides)
+			cfg, cfgErr := tuiIssueLaunchConfig(42, tt.defaultAgent, tt.overrides)
+			if cfgErr != nil {
+				t.Fatal(cfgErr)
+			}
 			if cfg.Parent != 42 || cfg.ParentRef != "42" || !cfg.UnblockedOnly {
 				t.Fatalf("cfg identity = %d/%q unblockedOnly=%v, want 42/42/true", cfg.Parent, cfg.ParentRef, cfg.UnblockedOnly)
 			}

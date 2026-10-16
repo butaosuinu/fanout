@@ -21,8 +21,10 @@ const (
 )
 
 type Definition struct {
-	Name    string
-	Command string
+	ModelFlag  string
+	EffortArgs func(string) []string
+	Name       string
+	Command    string
 	// LaunchArgs are flags injected into every launch and resume command.
 	LaunchArgs []string
 	// BackendLaunchArgs are flags injected only for the selected runtime.
@@ -51,6 +53,8 @@ type LaunchSpec struct {
 var registry = map[string]Definition{
 	"claude": {
 		Name:              "claude",
+		ModelFlag:         "--model",
+		EffortArgs:        func(effort string) []string { return []string{"--effort", effort} },
 		Command:           "claude",
 		BackendLaunchArgs: map[backend.Name][]string{backend.Tmux: {"--settings", claudeHookSettingsJSON}},
 		ModeArgs: map[LaunchMode][]string{
@@ -59,10 +63,15 @@ var registry = map[string]Definition{
 		},
 		ResumeArgs: []string{"--continue"},
 	},
-	"codex": {Name: "codex", Command: "codex", ResumeArgs: []string{"resume", "--last"}},
+	"codex": {
+		Name: "codex", Command: "codex", ResumeArgs: []string{"resume", "--last"},
+		ModelFlag:  "--model",
+		EffortArgs: func(effort string) []string { return []string{"-c", "model_reasoning_effort=" + effort} },
+	},
 	"opencode": {
-		Name:    "opencode",
-		Command: "opencode",
+		Name:      "opencode",
+		ModelFlag: "--model",
+		Command:   "opencode",
 		ModeArgs: map[LaunchMode][]string{
 			ModeBuild: {"--agent", "build"},
 			ModePlan:  {"--agent", "plan"},
@@ -126,11 +135,17 @@ func BuildCommandForBackend(name, prompt string, runtimeBackend backend.Name) (s
 // BuildCommandForBackendWithMode returns the shell command for the selected
 // runtime with the agent's initial launch mode made explicit.
 func BuildCommandForBackendWithMode(name, prompt string, runtimeBackend backend.Name, mode LaunchMode) (string, error) {
+	return BuildSelectionCommandForBackendWithMode(Selection{Name: name}, prompt, runtimeBackend, mode)
+}
+
+// BuildSelectionCommandForBackendWithMode preserves the model and effort selection.
+func BuildSelectionCommandForBackendWithMode(selection Selection, prompt string, runtimeBackend backend.Name, mode LaunchMode) (string, error) {
+	name := selection.Name
 	def, ok := registry[name]
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	args, err := launchArgsForBackend(def, runtimeBackend, mode)
+	args, err := launchArgsForBackend(def, selection, runtimeBackend, mode)
 	if err != nil {
 		return "", err
 	}
@@ -160,7 +175,12 @@ func BuildResolvedCommandForBackend(name, prompt string, runtimeBackend backend.
 // the selected runtime using the resolved executable path with the agent's
 // initial launch mode made explicit.
 func BuildResolvedCommandForBackendWithMode(name, prompt string, runtimeBackend backend.Name, mode LaunchMode) (string, error) {
-	spec, err := BuildResolvedLaunchSpec(name, prompt, runtimeBackend, mode)
+	return BuildResolvedSelectionCommandForBackendWithMode(Selection{Name: name}, prompt, runtimeBackend, mode)
+}
+
+// BuildResolvedSelectionCommandForBackendWithMode preserves the model and effort selection.
+func BuildResolvedSelectionCommandForBackendWithMode(selection Selection, prompt string, runtimeBackend backend.Name, mode LaunchMode) (string, error) {
+	spec, err := BuildResolvedSelectionLaunchSpec(selection, prompt, runtimeBackend, mode)
 	if err != nil {
 		return "", err
 	}
@@ -174,7 +194,16 @@ func BuildResolvedLaunchSpec(
 	runtimeBackend backend.Name,
 	mode LaunchMode,
 ) (LaunchSpec, error) {
-	return BuildResolvedLaunchSpecWithBackendArgs(name, prompt, runtimeBackend, mode, nil)
+	return BuildResolvedSelectionLaunchSpec(Selection{Name: name}, prompt, runtimeBackend, mode)
+}
+
+// BuildResolvedSelectionLaunchSpec preserves the model and effort selection.
+func BuildResolvedSelectionLaunchSpec(
+	selection Selection, prompt string,
+	runtimeBackend backend.Name,
+	mode LaunchMode,
+) (LaunchSpec, error) {
+	return BuildResolvedSelectionLaunchSpecWithBackendArgs(selection, prompt, runtimeBackend, mode, nil)
 }
 
 // BuildResolvedLaunchSpecWithBackendArgs builds a direct live launch and
@@ -186,11 +215,22 @@ func BuildResolvedLaunchSpecWithBackendArgs(
 	mode LaunchMode,
 	backendArgs []string,
 ) (LaunchSpec, error) {
+	return BuildResolvedSelectionLaunchSpecWithBackendArgs(Selection{Name: name}, prompt, runtimeBackend, mode, backendArgs)
+}
+
+// BuildResolvedSelectionLaunchSpecWithBackendArgs preserves the model and effort selection.
+func BuildResolvedSelectionLaunchSpecWithBackendArgs(
+	selection Selection, prompt string,
+	runtimeBackend backend.Name,
+	mode LaunchMode,
+	backendArgs []string,
+) (LaunchSpec, error) {
+	name := selection.Name
 	def, ok := registry[name]
 	if !ok {
 		return LaunchSpec{}, ValidateKnown(name)
 	}
-	args, err := launchArgsForBackend(def, runtimeBackend, mode)
+	args, err := launchArgsForBackend(def, selection, runtimeBackend, mode)
 	if err != nil {
 		return LaunchSpec{}, err
 	}
@@ -216,15 +256,21 @@ func BuildResumeCommand(name string) (string, error) {
 // BuildResumeCommandForBackend returns the resume command for the selected
 // runtime.
 func BuildResumeCommandForBackend(name string, runtimeBackend backend.Name) (string, error) {
+	return BuildSelectionResumeCommandForBackend(Selection{Name: name}, runtimeBackend)
+}
+
+// BuildSelectionResumeCommandForBackend preserves the model and effort selection.
+func BuildSelectionResumeCommandForBackend(selection Selection, runtimeBackend backend.Name) (string, error) {
+	name := selection.Name
 	def, ok := registry[name]
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	args, err := launchArgsForBackend(def, runtimeBackend, "")
+	args, err := BuildResumeArgsForBackend(selection, runtimeBackend, "")
 	if err != nil {
 		return "", err
 	}
-	return buildCommand(def.Command, slices.Concat(args, def.ResumeArgs), def.PromptFlag, ""), nil
+	return buildCommand(def.Command, args, def.PromptFlag, ""), nil
 }
 
 // BuildResolvedResumeCommand returns the live resume command using the resolved
@@ -237,11 +283,17 @@ func BuildResolvedResumeCommand(name string) (string, error) {
 // selected runtime using the resolved executable path from the caller's
 // environment.
 func BuildResolvedResumeCommandForBackend(name string, runtimeBackend backend.Name) (string, error) {
+	return BuildResolvedSelectionResumeCommandForBackend(Selection{Name: name}, runtimeBackend)
+}
+
+// BuildResolvedSelectionResumeCommandForBackend preserves the model and effort selection.
+func BuildResolvedSelectionResumeCommandForBackend(selection Selection, runtimeBackend backend.Name) (string, error) {
+	name := selection.Name
 	def, ok := registry[name]
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	args, err := launchArgsForBackend(def, runtimeBackend, "")
+	args, err := BuildResumeArgsForBackend(selection, runtimeBackend, "")
 	if err != nil {
 		return "", err
 	}
@@ -249,15 +301,38 @@ func BuildResolvedResumeCommandForBackend(name string, runtimeBackend backend.Na
 	if err != nil {
 		return "", err
 	}
-	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, slices.Concat(args, def.ResumeArgs), def.PromptFlag, ""), nil
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, args, def.PromptFlag, ""), nil
 }
 
-func launchArgsForBackend(def Definition, runtimeBackend backend.Name, mode LaunchMode) ([]string, error) {
+// BuildResumeArgsForBackend builds the canonical resume argv. An explicit
+// session ID is supported only by the Codex cold-restart lane; an empty ID
+// selects the registry's existing continue/last behavior.
+func BuildResumeArgsForBackend(selection Selection, runtimeBackend backend.Name, sessionID string) ([]string, error) {
+	def := registry[selection.Name]
+	args, err := launchArgsForBackend(def, selection, runtimeBackend, "")
+	if err != nil {
+		return nil, err
+	}
+	resume := def.ResumeArgs
+	if sessionID != "" {
+		if selection.Name != "codex" {
+			return nil, fmt.Errorf("explicit resume session requires agent codex")
+		}
+		resume = []string{"resume", sessionID}
+	}
+	return slices.Concat(args, resume), nil
+}
+
+func launchArgsForBackend(def Definition, selection Selection, runtimeBackend backend.Name, mode LaunchMode) ([]string, error) {
 	name, err := backend.ParseName(string(runtimeBackend))
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(def.LaunchArgs, def.BackendLaunchArgs[name], def.ModeArgs[mode]), nil
+	args, err := selectionArgs(selection)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(def.LaunchArgs, def.BackendLaunchArgs[name], def.ModeArgs[mode], args), nil
 }
 
 // WithFanoutBin pins helper calls made by the launched agent to the same fanout

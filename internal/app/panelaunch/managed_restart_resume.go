@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -532,8 +533,12 @@ func existingManagedResumeIntent(
 func managedResumeIntentTargetsRow(intent state.LaunchIntent, pane state.Pane) bool {
 	return intent.Parent == pane.Parent && intent.RuntimeParent == pane.RuntimeParent &&
 		intent.IssueNum == pane.IssueNum && intent.TaskID == pane.TaskID &&
-		intent.WorktreePath == pane.WorktreePath && intent.Session == pane.SessionID &&
-		intent.SocketPath == pane.SocketPath &&
+		intent.WorktreePath == pane.WorktreePath && sameManagedResumeRoute(intent, pane) &&
+		intent.Launch != nil && intent.Launch.Selection() == (agent.Selection{Name: pane.Agent, Model: pane.Model, Effort: pane.Effort})
+}
+
+func sameManagedResumeRoute(intent state.LaunchIntent, pane state.Pane) bool {
+	return intent.Session == pane.SessionID && intent.SocketPath == pane.SocketPath &&
 		intent.Resource.WorkspaceID == pane.WorkspaceID && intent.Resource.PaneID == pane.PaneID
 }
 
@@ -553,15 +558,13 @@ func prepareManagedResumeIntent(
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
-	environment, err := restarted.WorkloadEnvironment(os.Environ(), route.LauncherPath)
+	intent, err := newManagedResumeIntent(id, nonce, candidate, deadline)
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
-	envPath, envCount, err := restarted.PrepareWorkloadEnvironment(nonce, environment)
-	if err != nil {
+	if err := prepareManagedResumeEnvironment(restarted, route.LauncherPath, intent.Launch); err != nil {
 		return state.LaunchIntent{}, err
 	}
-	intent := newManagedResumeIntent(id, nonce, envPath, envCount, candidate, deadline)
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
 		return state.LaunchIntent{}, errors.Join(
@@ -571,18 +574,30 @@ func prepareManagedResumeIntent(
 	return intent, nil
 }
 
+func prepareManagedResumeEnvironment(restarted ManagedRestartRuntime, launcherPath string, launch *state.LaunchCapsule) error {
+	environment, err := restarted.WorkloadEnvironment(os.Environ(), launcherPath)
+	if err != nil {
+		return err
+	}
+	launch.EnvFilePath, launch.EnvNameCount, err = restarted.PrepareWorkloadEnvironment(launch.Nonce, environment)
+	return err
+}
+
 func newManagedResumeIntent(
-	id, nonce, envPath string,
-	envCount int,
+	id, nonce string,
 	candidate managedRestartCandidate,
 	deadline time.Time,
-) state.LaunchIntent {
+) (state.LaunchIntent, error) {
 	saved, current := candidate.row.saved, candidate.live
 	ownerRoot := ""
 	if saved.Parent == ManualParentRef || strings.HasPrefix(saved.Parent, "plan:") {
 		ownerRoot = candidate.row.root
 	}
 	ref := *saved.AgentSession
+	launch, err := managedResumeCapsule(saved, nonce)
+	if err != nil {
+		return state.LaunchIntent{}, err
+	}
 	return state.LaunchIntent{
 		ID: id, Kind: state.IntentResume, Status: state.IntentRealized,
 		Parent: saved.Parent, RuntimeParent: saved.RuntimeParent, OwnerProjectRoot: ownerRoot,
@@ -597,11 +612,20 @@ func newManagedResumeIntent(
 		},
 		Session: saved.SessionID, SocketPath: saved.SocketPath,
 		ExpiresUnixMS: deadline.UnixMilli(), ResumeAgentSession: &ref,
-		Launch: &state.LaunchCapsule{
-			Nonce: nonce, Agent: "codex", Executable: saved.LaunchExecutable,
-			Args: []string{"resume", ref.Value}, EnvFilePath: envPath, EnvNameCount: envCount,
-		},
+		Launch: launch,
+	}, nil
+}
+
+func managedResumeCapsule(saved state.Pane, nonce string) (*state.LaunchCapsule, error) {
+	selection := agent.Selection{Name: saved.Agent, Model: saved.Model, Effort: saved.Effort}
+	args, err := agent.BuildResumeArgsForBackend(selection, backend.NormalizeName(saved.Backend), saved.AgentSession.Value)
+	if err != nil {
+		return nil, err
 	}
+	return &state.LaunchCapsule{
+		Nonce: nonce, Agent: saved.Agent, Executable: saved.LaunchExecutable,
+		Args: args, Model: saved.Model, Effort: saved.Effort,
+	}, nil
 }
 
 func startRestartedCodex(
@@ -848,6 +872,7 @@ func sameManagedRestartBaseline(current, saved state.Pane) bool {
 		slices.Equal(current.LaunchArgs, saved.LaunchArgs),
 		current.DirectAgentLaunch == saved.DirectAgentLaunch,
 		current.Agent == saved.Agent, current.PlanMode == saved.PlanMode,
+		current.Model == saved.Model, current.Effort == saved.Effort,
 		current.WorktreePath == saved.WorktreePath,
 	}
 	return !slices.Contains(requirements, false)

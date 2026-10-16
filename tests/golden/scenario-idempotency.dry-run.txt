@@ -6,6 +6,7 @@
 [info] already fanned-out (skipping): #801
 [info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #802: New target
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-idempotency/project_root/.fanout/briefings/fanout-project_root-802.md
   slug -> new-target-802
   worktree -> <REPO>/tests/fixtures/scenario-idempotency/project_root/.fanout/worktrees/new-target-802

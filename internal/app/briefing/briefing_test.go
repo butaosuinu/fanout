@@ -690,6 +690,22 @@ func TestRenderIssuePlanCoordinator(t *testing.T) {
 			},
 		},
 		{
+			name:  "worker selection with a glob remains one literal shell token",
+			num:   474,
+			agent: "claude:opus[1m]:high",
+			wants: []string{
+				"Fan out with `fanout plan <spec> --agent 'claude:opus[1m]:high'`",
+			},
+		},
+		{
+			name:  "worker selection with a variable remains one literal shell token",
+			num:   474,
+			agent: "codex:model$variant:high",
+			wants: []string{
+				"Fan out with `fanout plan <spec> --agent 'codex:model$variant:high'`",
+			},
+		},
+		{
 			name:  "Refs line appears and Closes is only used in the never-Closes phrasing",
 			num:   474,
 			title: "Add plan-mode toggle",

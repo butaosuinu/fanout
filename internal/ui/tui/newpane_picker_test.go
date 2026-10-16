@@ -15,6 +15,29 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 )
 
+func TestNewPanePreservesDefaultSelection(t *testing.T) {
+	const raw = "codex:gpt-6-astra:xhigh"
+	m := newModel(Options{DefaultAgent: raw})
+	m.newPane = newNewPaneForm(m.opts.DefaultAgent, 80)
+	if got := m.selectedDefaultAgent(); got != raw {
+		t.Fatalf("default selection = %q", got)
+	}
+	if got := m.selectedNewPaneAgents(); !slices.Equal(got, []string{raw}) {
+		t.Fatalf("prompt/attach selection = %q", got)
+	}
+	m.newPane.agentCount = map[string]int{"claude": 1}
+	if got := m.selectedDefaultAgent(); got != "claude" {
+		t.Fatalf("codex model leaked into claude: %q", got)
+	}
+	m.newPane.assign.rows = []assignRow{{target: "42", agentIdx: defaultAgentIndex("codex")}}
+	if got := m.assignOverrides()["42"]; got != raw {
+		t.Fatalf("issue override lost selection: %q", got)
+	}
+	if got := m.newPaneAgentSelection(launchAgents[m.newPane.workerIndex]); got != raw {
+		t.Fatalf("plan worker selection = %q", got)
+	}
+}
+
 func TestRankPickerItems(t *testing.T) {
 	items := []pickerItem{
 		{key: "#41", title: "Add API client", labels: []string{"backend"}},

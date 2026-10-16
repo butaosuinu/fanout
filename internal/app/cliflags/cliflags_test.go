@@ -100,6 +100,25 @@ func TestParseAgentOverrides(t *testing.T) {
 	}
 }
 
+func TestParseAgentSelectionLayers(t *testing.T) {
+	cfg := parseOK(t, "1", "--agent", "codex:gpt-6-astra:medium", "--agent", "2=codex::high", "--agent", "3=claude:opus:xhigh")
+	for target, want := range map[string]string{"1": "codex:gpt-6-astra:medium", "2": "codex:gpt-6-astra:high", "3": "claude:opus:xhigh"} {
+		if got := cfg.EffectiveSelection(target).String(); got != want {
+			t.Errorf("EffectiveSelection(%s) = %s, want %s", target, got, want)
+		}
+	}
+	if got := cfg.EffectiveAgent("2"); got != "codex" {
+		t.Fatalf("name-only API returned %q", got)
+	}
+}
+
+func TestParseAgentSelectionPreservesEqualsInModel(t *testing.T) {
+	cfg := parseOK(t, "1", "--agent", "codex:model=version:low", "--agent", "2=codex:other=version")
+	if cfg.Model != "model=version" || cfg.EffectiveSelection("2").Model != "other=version" {
+		t.Fatalf("model values changed: %+v", cfg)
+	}
+}
+
 func TestParseAgentOverrideCanonicalizesIssueNumbers(t *testing.T) {
 	cfg := parseOK(t, "100", "--agent", "001=codex")
 

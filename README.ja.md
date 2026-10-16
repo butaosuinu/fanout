@@ -186,6 +186,11 @@ watcher は repo 全体から label 付き issue を探し、one-shot session �
 ファンアウト系のコマンドは子の agent が必要です — `--agent claude` / `--agent codex` /
 `--agent opencode` を渡すか `FANOUT_AGENT` を設定してください(status・dashboard・lifecycle 系の
 `--status` / `dashboard` / `--merge` には不要)。
+`--agent` と `FANOUT_AGENT` は `name[:model[:effort]]` を受け付けます。
+例: `--agent 124=claude:opus:xhigh`、`--agent codex:gpt-6-astra:medium`。
+空欄は同じ agent の bare 指定から補い、保存した選択値は復元時に再指定します。
+OpenCode は model のみ対応し、Codex Plan/team lane は
+[#791](https://github.com/butaosuinu/fanout/issues/791) まで model/effort 指定を拒否します。
 すべての flag・環境変数・exit code は
 [CLI リファレンス](https://butaosuinu.github.io/fanout/ja/docs/cli/)に記載しています。
 

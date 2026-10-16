@@ -787,7 +787,8 @@ func (l *Launcher) prepareManagedLaunchCapsule(
 	}
 	return &state.LaunchCapsule{
 		Nonce: resolved.nonce, EmitterNonce: resolved.emitter.nonce, Agent: req.Agent,
-		AgentName:  resolved.agentName,
+		AgentName: resolved.agentName,
+		Model:     req.Model, Effort: req.Effort,
 		Executable: resolved.spec.Executable, Args: resolved.spec.Args,
 		TeamDBPath:          req.TeamDBPath,
 		CodexTeamStatusPath: newManagedTeamStatusPath(req),
@@ -808,14 +809,17 @@ func buildManagedLaunchSpecForRoute(req Request, route backend.OwnedLaunchRoute)
 	if len(backendArgs) == 0 {
 		return buildManagedLaunchSpec(req)
 	}
-	return agent.BuildResolvedLaunchSpecWithBackendArgs(
-		req.Agent, req.Prompt, backend.Herdr, req.LaunchMode, backendArgs,
+	return agent.BuildResolvedSelectionLaunchSpecWithBackendArgs(
+		req.Selection(), req.Prompt, backend.Herdr, req.LaunchMode, backendArgs,
 	)
 }
 
 func buildManagedLaunchSpec(req Request) (agent.LaunchSpec, error) {
+	if err := ValidateSelection(req.Selection(), req.PlanMode(), req.CodexTeamRequested || req.CodexTeamMode); err != nil {
+		return agent.LaunchSpec{}, err
+	}
 	if !req.CodexPlanMode() && !req.CodexTeamMode {
-		return agent.BuildResolvedLaunchSpec(req.Agent, req.Prompt, backend.Herdr, req.LaunchMode)
+		return agent.BuildResolvedSelectionLaunchSpec(req.Selection(), req.Prompt, backend.Herdr, req.LaunchMode)
 	}
 	codexPath, err := agent.ResolveExecutable("codex")
 	if err != nil {
@@ -860,7 +864,8 @@ func validateManagedLaunchBinding(
 	if err != nil {
 		return err
 	}
-	if launch.Agent != req.Agent || launch.Executable != spec.Executable ||
+	if launch.Agent != req.Agent || launch.Model != req.Model || launch.Effort != req.Effort ||
+		launch.Executable != spec.Executable ||
 		!slices.Equal(launch.Args, spec.Args) {
 		return fmt.Errorf("saved Herdr launch does not match the current agent command")
 	}
@@ -1108,6 +1113,7 @@ func applyManagedLaunchTelemetry(pane *state.Pane, intent state.LaunchIntent) {
 	}
 	pane.LaunchExecutable = launch.Executable
 	pane.LaunchArgs = slices.Clone(launch.Args)
+	pane.Model, pane.Effort = launch.Model, launch.Effort
 	pane.EmitterRebindNonce, pane.EmitterRebindSequence = "", 0
 	if launch.EmitterNonce == "" {
 		return

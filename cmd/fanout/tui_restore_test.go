@@ -1096,17 +1096,21 @@ func TestRestoreAgentCommandUsesSavedCodexCoordinatorPlanThread(t *testing.T) {
 
 func TestRestoreAgentCommandUsesGenericResumeForNonCodexPlanPane(t *testing.T) {
 	for _, tc := range []struct {
-		agent string
-		want  string
+		agent, model, effort, want string
+		planMode                   bool
 	}{
-		{agent: "claude", want: "--continue"},
-		{agent: "opencode", want: "--continue"},
+		{agent: "claude", want: "--continue", planMode: true},
+		{agent: "opencode", want: "--continue", planMode: true},
+		{agent: "claude", model: "opus", effort: "medium", want: "--model opus --effort medium --continue", planMode: true},
+		{agent: "opencode", model: "provider/model", want: "--model provider/model --continue", planMode: true},
+		{agent: "codex", model: "gpt-6-astra", effort: "high", want: "--model gpt-6-astra -c 'model_reasoning_effort=high' resume --last"},
 	} {
-		t.Run(tc.agent, func(t *testing.T) {
+		t.Run(tc.agent+tc.model, func(t *testing.T) {
 			installRestoreAgentScript(t, tc.agent)
 			command, statusPath, err := restoreAgentCommand(state.Pane{
-				Agent:    tc.agent,
-				PlanMode: true,
+				Agent: tc.agent,
+				Model: tc.model, Effort: tc.effort,
+				PlanMode: tc.planMode,
 			}, t.TempDir(), "fanout")
 			if err != nil {
 				t.Fatal(err)
