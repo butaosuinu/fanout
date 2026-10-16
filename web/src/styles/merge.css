@@ -106,6 +106,10 @@
   transition:border-color .25s ease, color .25s ease;
 }
 .btn-quiet:hover{ border-color:var(--err); color:var(--err); }
+/* 押せない削除ボタン(この branch を base にする open PR がある)。マージボタンと同じく
+   aria-disabled で、理由は tip で出す。警告色の hover は出さない。 */
+.btn-quiet[aria-disabled="true"]{ color:var(--ink-40); cursor:default; }
+.btn-quiet[aria-disabled="true"]:hover{ border-color:var(--suna); color:var(--ink-40); }
 .d-branch-delete-error{
   font-family:var(--f-body); font-size:11px; color:var(--err);
   overflow-wrap:anywhere;

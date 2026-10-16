@@ -158,7 +158,8 @@ export interface PRRef {
   autoMerge?: boolean;
   queued?: boolean;
   /* GitHub native stack への所属(ghissue.PRStack)。ダッシュボードの poller だけが
-   * 埋める。表示専用 — マージ・branch 削除・保持の解放は entries を見ない。 */
+   * 埋める。表示用 — マージボタンの無効化理由には使うが、サーバのマージ判定は live
+   * 読み取りで行い、branch 削除と保持の解放は entries を見ない。 */
   stack?: PRStack;
 }
 

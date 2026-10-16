@@ -114,3 +114,83 @@ exit "$GH_FAKE_EXIT"
 		})
 	}
 }
+
+// TestPRStack pins the merge fence's live read: unlike PRStacks it keeps no
+// partial answer, so an error anywhere in the response is the fence's refusal.
+func TestPRStack(t *testing.T) {
+	tests := []struct {
+		name    string
+		output  string
+		exit    int
+		want    *PRStack
+		wantErr bool
+	}{
+		{
+			name: "reads the layers below",
+			output: `{"data":{"repository":{"pr_844":{"stackEntry":{"position":2},"stack":{"number":12,"size":2,"baseRefName":"main","entries":{"nodes":[
+			  {"position":1,"pullRequest":{"number":843,"state":"OPEN","mergedAt":null,"isDraft":false,"reviewDecision":"","headRefName":"stack/a"}},
+			  {"position":2,"pullRequest":{"number":844,"state":"OPEN","mergedAt":null,"isDraft":false,"reviewDecision":"","headRefName":"stack/b"}}
+			]}}}}}}`,
+			want: &PRStack{Number: 12, Size: 2, BaseRef: "main", Position: 2, Entries: []PRStackEntry{
+				{Position: 1, PR: PRRef{Number: 843, State: "OPEN", HeadRef: "stack/a"}},
+				{Position: 2, PR: PRRef{Number: 844, State: "OPEN", HeadRef: "stack/b"}},
+			}},
+		},
+		{
+			name:   "a pull request in no stack is nil",
+			output: `{"data":{"repository":{"pr_844":{"stackEntry":null,"stack":null}}}}`,
+		},
+		{
+			// PRStacks would keep the readable layers; a fence must not.
+			name: "an error inside the stack refuses",
+			output: `{"data":{"repository":{"pr_844":{"stackEntry":{"position":2},"stack":{"number":12,"size":2,"baseRefName":"main","entries":{"nodes":[
+			  {"position":1,"pullRequest":null}]}}}}},
+			  "errors":[{"message":"Could not resolve to a node","path":["repository","pr_844","stack","entries","nodes",0,"pullRequest"]}]}`,
+			exit:    1,
+			wantErr: true,
+		},
+		{
+			// A server whose schema has no stack has no native stacks to fence.
+			// captured from real gh 2.92.0 against an undefined field
+			name:   "a schema without the stack fields reads as no stack",
+			output: `{"errors":[{"path":["query","repository","pr_844","stackEntry"],"extensions":{"code":"undefinedField","typeName":"PullRequest","fieldName":"stackEntry"},"message":"Field 'stackEntry' doesn't exist on type 'PullRequest'"}]}`,
+			exit:   1,
+		},
+		{
+			name:    "a null pull request is an error, not a pull request in no stack",
+			output:  `{"data":{"repository":{"pr_844":null}}}`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			argsPath := installFakeGHScript(t, `
+printf '%s\n' "$@" > "$GH_FAKE_ARGS"
+printf '%s' "$GH_FAKE_OUTPUT"
+exit "$GH_FAKE_EXIT"
+`)
+			t.Setenv("GH_FAKE_OUTPUT", tt.output)
+			t.Setenv("GH_FAKE_EXIT", strconv.Itoa(tt.exit))
+
+			got, err := (Runner{}).PRStack(t.Context(), "owner", "repo", 844)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("PRStack() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("PRStack() = %#v, want %#v", got, tt.want)
+			}
+			data, err := os.ReadFile(argsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// One page of 100 entries: a layer the read does not return counts as
+			// unmerged, so the 20 the maps draw would refuse layer 22 forever.
+			args := string(data)
+			for _, want := range []string{"pr_844: pullRequest(number: 844)", "entries(first: 100)"} {
+				if strings.Contains(args, "\n-F\n") || !strings.Contains(args, want) {
+					t.Fatalf("PRStack() args = %q, want -f variables and %q", args, want)
+				}
+			}
+		})
+	}
+}
