@@ -126,6 +126,45 @@ func TestFetchWaveGraphNumericParentUnionsSources(t *testing.T) {
 	}
 }
 
+func TestFetchWaveGraphBodyMarkersOnlyScopeChildDiscovery(t *testing.T) {
+	client := &fakeGraphClient{
+		parentBody: `**wave1**
+- [ ] #101 API child (blocked by #201)
+- [ ] #103 recorded child
+- [ ] #104 outside body candidate
+<!-- fanout:start -->
+**wave2**
+- [ ] #102 body child (blocked by #101)
+<!-- fanout:end -->
+- [ ] #105 outside body candidate
+`,
+		subIssues: []ghissue.Issue{{Number: 101, State: "OPEN", Body: "x"}},
+		details: map[int]ghissue.Issue{
+			102: {Number: 102, State: "OPEN", Body: "x"},
+			103: {Number: 103, State: "OPEN", Body: "x"},
+		},
+		states: map[int]string{201: "CLOSED"},
+	}
+	graph, err := FetchWaveGraph(client, "100", []int{103})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := childNumbers(graph), []int{101, 102, 103}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("children = %v, want %v", got, want)
+	}
+	if want := map[int]int{102: 1, 103: 1}; !reflect.DeepEqual(client.detailCalls, want) {
+		t.Fatalf("IssueDetail calls = %v, want %v", client.detailCalls, want)
+	}
+	wantInfo := map[int]WaveInfo{
+		101: {Wave: 2, WaveLabel: "wave1", Blockers: []blockers.Status{{Num: 201, State: "CLOSED"}}},
+		102: {Wave: 3, WaveLabel: "wave2", Blockers: []blockers.Status{{Num: 101, State: "OPEN"}}, Blocked: true},
+		103: {Wave: 1, WaveLabel: "wave1", Blockers: []blockers.Status{}},
+	}
+	if !reflect.DeepEqual(graph.Info, wantInfo) {
+		t.Fatalf("Info = %#v, want %#v", graph.Info, wantInfo)
+	}
+}
+
 func TestFetchWaveGraphHydratesChildrenInOneBatch(t *testing.T) {
 	client := &fakeBatchGraphClient{
 		fakeGraphClient: fakeGraphClient{

@@ -1358,6 +1358,7 @@ func parseProjectPage(raw []byte, entryField string) (projectPage, error) {
 var (
 	rePositiveCommentID = regexp.MustCompile(`^[1-9][0-9]*$`)
 	taskListRE          = regexp.MustCompile(`^\s*-\s+\[[ xX]\]\s*#([0-9]+)`)
+	taskListRegionRE    = regexp.MustCompile(`(?s)<!-- fanout:start -->(.*?)(?:<!-- fanout:end -->|$)`)
 	waveHeadingRE       = regexp.MustCompile(`(?i)^wave\s*([0-9]+)`)
 )
 
@@ -1365,9 +1366,16 @@ var (
 // parent body. Cross-repo refs (`owner/repo#N`) are silently ignored: the
 // regex only matches `#N` immediately after the checkbox.
 //
-// Order is preserved (first appearance wins) and duplicates collapsed, to
-// match the bash jq pipeline that runs `unique` before iterating.
+// If fanout:start markers exist, only their regions (through fanout:end or
+// end of body) are scanned. Numbers are sorted and duplicates collapsed.
 func TaskListNumbers(parentBody string) []int {
+	var regions []string
+	for _, match := range taskListRegionRE.FindAllStringSubmatch(parentBody, -1) {
+		regions = append(regions, match[1])
+	}
+	if len(regions) > 0 {
+		parentBody = strings.Join(regions, "\n")
+	}
 	seen := map[int]bool{}
 	var out []int
 	for line := range strings.SplitSeq(parentBody, "\n") {
