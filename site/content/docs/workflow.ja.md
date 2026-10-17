@@ -30,6 +30,20 @@ fanout は両ソースの和集合を取ります。
 - [ ] #7 Port the formatter (blocked by #4)
 ```
 
+本文由来の子候補を限定するには、タスクリストを `<!-- fanout:start -->` と `<!-- fanout:end -->` で囲みます。
+
+```text
+<!-- fanout:start -->
+- [ ] #4 Extract the parser
+- [ ] #7 Port the formatter (blocked by #4)
+<!-- fanout:end -->
+```
+
+start マーカーがなければ本文全体を走査します。
+end がなければ start から本文末尾まで、複数区間があればその和集合を使います。
+マーカーが限定するのは本文から検出する子候補だけです。Sub-issues と `--include` による追加、OPEN / `--only` / `--skip` の絞り込みは引き続き適用されます。
+選ばれた子の wave 見出しと blocker 注記は、従来どおり親本文全体から読み取ります。
+
 blocker(後述の wave 進行を駆動する依存関係)は 2 つの書式から読み取られます。
 
 - **子本文の `## Blocked by` セクション。** 次の空行までに並ぶ issue 番号を集めます。

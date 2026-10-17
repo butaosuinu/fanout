@@ -1085,6 +1085,60 @@ func assertFakeGHCommandLines(t *testing.T, argsPath string, want []string) {
 	}
 }
 
+func TestTaskListNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want []int
+	}{
+		{
+			name: "no markers scans whole body",
+			body: "Notes #9\n- [ ] #8 (blocked by #10)\n- [x] #7\n- [X] #8\n- [ ] owner/repo#11\n",
+			want: []int{7, 8},
+		},
+		{
+			name: "single pair excludes outside rows",
+			body: "- [ ] #1\n<!-- fanout:start -->\n- [ ] #7\n- [x] #8 (blocked by #10)\n<!-- fanout:end -->\n- [ ] #9\n",
+			want: []int{7, 8},
+		},
+		{
+			name: "start only scans to end",
+			body: "- [ ] #1\n<!-- fanout:start -->\n- [ ] #7\n- [ ] #8",
+			want: []int{7, 8},
+		},
+		{
+			name: "multiple regions union and deduplicate",
+			body: "<!-- fanout:start -->\n- [ ] #8\n<!-- fanout:end -->\n- [ ] #9\n<!-- fanout:start -->\n- [ ] #7\n- [ ] #8\n<!-- fanout:end -->\n- [ ] #10\n",
+			want: []int{7, 8},
+		},
+		{
+			name: "last region has no end",
+			body: "<!-- fanout:start -->\n- [ ] #8\n<!-- fanout:end -->\n- [ ] #9\n<!-- fanout:start -->\n- [ ] #7",
+			want: []int{7, 8},
+		},
+		{
+			name: "empty region does not fall back to whole body",
+			body: "- [ ] #1\n<!-- fanout:start --><!-- fanout:end -->\n- [ ] #9\n",
+		},
+		{
+			name: "end only preserves whole body scan",
+			body: "- [ ] #7\n<!-- fanout:end -->\n- [ ] #8\n",
+			want: []int{7, 8},
+		},
+		{
+			name: "indented markers with CRLF",
+			body: "- [ ] #1\r\n  <!-- fanout:start -->\r\n  - [X] #7\r\n  <!-- fanout:end -->\r\n- [ ] #9\r\n",
+			want: []int{7},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := TaskListNumbers(tc.body); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("TaskListNumbers() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTaskListWavesAssignsWaveHeadingsToIssueRows(t *testing.T) {
 	body := `
 overview
