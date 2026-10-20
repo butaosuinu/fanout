@@ -76,12 +76,16 @@ since_epoch=$(date -u -d "$SINCE" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:
 until_epoch=$(date -u -d "$UNTIL" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$UNTIL" "+%s")
 candidates="$tmpdir/candidates"
 : > "$candidates"
-for f in "$claude_home"/projects/"$slug"/*.jsonl \
-         "$claude_home"/projects/"$slug"--dmux-worktrees-*/*.jsonl \
-         "$claude_home"/projects/"$slug"--fanout-worktrees-*/*.jsonl; do
-  [ -e "$f" ] || continue
-  mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
-  [ "$mtime" -ge "$since_epoch" ] && printf '%s\n' "$f" >> "$candidates"
+for project in "$claude_home"/projects/"$slug" \
+               "$claude_home"/projects/"$slug"--dmux-worktrees-* \
+               "$claude_home"/projects/"$slug"--fanout-worktrees-*; do
+  for f in "$project"/*.jsonl \
+           "$project"/*/subagents/agent-*.jsonl \
+           "$project"/*/subagents/workflows/*/agent-*.jsonl; do
+    [ -e "$f" ] || continue
+    mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
+    [ "$mtime" -ge "$since_epoch" ] && printf '%s\n' "$f" >> "$candidates"
+  done
 done
 ```
 
@@ -91,13 +95,17 @@ done
 - `: > "$candidates"` で空ファイルを先に作る。候補が 0 件だと `for` ループが
   `printf >>` を一度も実行せず、後段の `while read < "$candidates"` が
   「No such file or directory」になる。
-- 既知の限界: この glob はトップレベルの `*.jsonl` だけを見る。サブエージェントの tool
-  実行履歴は `<sessionId>/subagents/agent-*.jsonl` に別記録されるため、委譲中の tool
-  error は集計に含まれない(#393)。
+- トップレベルと `<sessionId>/subagents/agent-*.jsonl`、
+  `<sessionId>/subagents/workflows/<runId>/agent-*.jsonl` を同じ候補リストに含め、
+  `tool_errors.total` に合算する(#393)。親 JSONL の有無・mtime に依存せず、各ファイルの
+  mtime を判定する。3 つの glob は重ならず、workflow は `<runId>` の 1 階層だけを探す。
+  対象 project 以外や任意の深さへは探索を広げない。
+- mtime 取得は対象ファイルごと、内容検索の `rg` は候補全体で 1 回。大量の subagent で
+  stat 回数と引数長は増えるが、全 project の再帰走査やファイルごとの `rg` は行わない。
 
 候補リストは配列に読み込み(`$(cat …)` で rg に渡すと空白を含むパスが単語分割される)、
-この時点で自セッションを除外する。実行中セッションの transcript はこの skill の解析
-コマンドやプロンプト文字列を引用しているため、含めると誤検出し、集計後の除外では
+この時点で自セッションとその subagent を除外する。実行中セッションの transcript は
+この skill の解析コマンドやプロンプト文字列を引用しているため、含めると誤検出し、集計後の除外では
 `total` が既に膨らんでいる:
 
 ```bash
