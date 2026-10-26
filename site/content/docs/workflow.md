@@ -27,6 +27,17 @@ Children can be declared through GitHub **Sub-issues**, through the parent body'
 - [ ] #7 Port the formatter (blocked by #4)
 ```
 
+To limit body-derived children, enclose the task list in `<!-- fanout:start -->` and `<!-- fanout:end -->`:
+
+```text
+<!-- fanout:start -->
+- [ ] #4 Extract the parser
+- [ ] #7 Port the formatter (blocked by #4)
+<!-- fanout:end -->
+```
+
+Without a start marker, fanout scans the whole body. A start without an end scans to the end of the body; multiple regions are combined. Markers only limit children discovered from the body: Sub-issues and `--include` still add children, and the OPEN / `--only` / `--skip` filters still apply. Wave headings and blocker annotations for selected children are still read from the whole parent body.
+
 Blockers — the dependencies that drive wave progression below — are read from two shapes:
 
 - **The child body's `## Blocked by` section** — issue numbers are collected up to the next blank line.
