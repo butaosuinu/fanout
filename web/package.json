@@ -44,7 +44,7 @@
     "@vitejs/plugin-react": "^6.0.2",
     "fanout-complexity-lint": "workspace:*",
     "jsdom": "^29.1.1",
-    "msw": "^2.14.6",
+    "msw": "^3.0.0",
     "oxfmt": "0.70.0",
     "oxlint": "^1.69.0",
     "typescript": "^7.0.0",
