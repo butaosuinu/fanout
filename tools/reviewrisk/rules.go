@@ -39,6 +39,7 @@ var fileRules = map[string]Rule{
 	"internal/ui/dashboard/merge.go":        {ID: "dashboard-merge", Class: ClassH, Source: SourceDocTable, Note: "mutation 経路(merge)。PR 特定・事前検証・gh 失敗のステータス写像"},
 	"internal/ui/dashboard/deletebranch.go": {ID: "dashboard-delete-branch", Class: ClassH, Source: SourceDocTable, Note: "mutation 経路(マージ後の head ref 削除)。所有権検証"},
 	"internal/ui/dashboard/runfile.go":      {ID: "dashboard-runfile", Class: ClassH, Source: SourceDocTable, Note: "token を含む dashboard.json・reuse/trust ゲート"},
+	"internal/ui/dashboard/registry.go":     {ID: "dashboard-registry", Class: ClassH, Source: SourceDocTable, Note: "ユーザーレベルの dashboard 登録・所有境界・生存検証"},
 	"internal/ui/dashboard/diff.go":         {ID: "dashboard-diff", Class: ClassH, Source: SourceDocTable, Note: "worktree diff の identity 検証・read-only 配信"},
 	"internal/ui/dashboard/peek.go":         {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン"},
 	"internal/ui/dashboard/plan.go":         {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン(plan mode かつ codex 限定)"},

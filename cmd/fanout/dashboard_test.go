@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,7 +19,42 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/ui/dashboard"
 )
+
+func TestDashboardListOutsideRepository(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	var out, errOut bytes.Buffer
+	lg := log.NewWith(&out, &errOut, false)
+	if code := cmdDashboard([]string{"--list"}, lg); code != 0 || out.String() != "PID\tURL\tPROJECT ROOT\n" {
+		t.Fatalf("empty list code=%d output=%q error=%q", code, out.String(), errOut.String())
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer srv.Close()
+	root := filepath.Join(t.TempDir(), "repo with spaces")
+	cleanup, err := dashboard.RegisterDashboard(root, dashboard.RunFile{URL: srv.URL + "/?token=test-secret", Token: "test-secret", PID: os.Getpid(), StartedAt: "2026-10-17T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	out.Reset()
+	if code := cmdDashboard([]string{"--list"}, lg); code != 0 {
+		t.Fatalf("list failed: code=%d error=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), srv.URL+"/") || !strings.Contains(out.String(), root) || strings.Contains(out.String(), "test-secret") {
+		t.Fatal("listing omitted the locator or exposed its token")
+	}
+	for _, args := range [][]string{{"--list", "--open"}, {"--web", "--list"}, {"--list", "--port", "0"}, {"--list", "--no-keybind"}} {
+		if code := cmdDashboard(args, lg); code != 2 {
+			t.Errorf("server options accepted with list: %v => %d", args, code)
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	if code := cmdDashboard([]string{"--list"}, lg); code != 1 {
+		t.Fatalf("registry error code=%d, want 1", code)
+	}
+}
 
 type dashboardShortcutBinderFake struct {
 	backend.Backend

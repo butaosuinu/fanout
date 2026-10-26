@@ -4,8 +4,25 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 )
+
+func TestIsLiveDoesNotFollowRedirects(t *testing.T) {
+	var reached atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirect.Close()
+	if (&RunFile{URL: redirect.URL, PID: os.Getpid()}).IsLive() || reached.Load() {
+		t.Fatal("health probe followed a redirect or accepted it as live")
+	}
+}
 
 func TestIsLiveProbesHealthzNotTokenizedRoot(t *testing.T) {
 	// Only /healthz returns 200; everything else (including the tokenized root)
