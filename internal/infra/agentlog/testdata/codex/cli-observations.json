@@ -1,0 +1,12 @@
+{
+  "version": "0.164.0",
+  "feature_list_row": "hooks                                    stable             true",
+  "config_present_at_feature_probe": false,
+  "exec_source": "exec",
+  "exec_originator": "codex_exec",
+  "exec_outcome": "network denied; terminated after 15 seconds",
+  "tui_outcome": "Operation not permitted (os error 1); no keys sent",
+  "notification_config_probe": "exec started without configuration rejection; dispatch not observed",
+  "hook_trust_accepted": false,
+  "hook_stdin_observed": false
+}

@@ -1,0 +1,14 @@
+{
+  "version": "2.1.311",
+  "platform": "macOS 15.6 arm64",
+  "mode": "interactive startup, no input",
+  "network": "denied",
+  "real_home_data": "denied",
+  "keychain": "denied",
+  "exit_code": 1,
+  "error": "ENOTFOUND api.anthropic.com",
+  "registry_files_observed": 0,
+  "hook_events_observed": 0,
+  "trust_accepted": false,
+  "authenticated": false
+}

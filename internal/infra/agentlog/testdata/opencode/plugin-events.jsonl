@@ -1,0 +1,10 @@
+{"probe": "init", "directory": "/fixture/work", "pid": 42001, "childStatus": 0, "childStdout": "fanout dev (none)"}
+{"type": "session.created", "propertyKeys": ["sessionID", "info"], "info": {"id": "ses_fixture001", "time": {"created": 1793082115896, "updated": 1793082115896}}}
+{"type": "session.updated", "propertyKeys": ["sessionID", "info"], "info": {"id": "ses_fixture001", "time": {"created": 1793082115896, "updated": 1793082115912}}}
+{"type": "message.updated", "propertyKeys": ["sessionID", "info"], "info": {"id": "msg_fixture001", "sessionID": "ses_fixture001", "role": "user", "time": {"created": 1793082115912}}}
+{"type": "message.part.updated", "propertyKeys": ["sessionID", "part", "time"]}
+{"type": "session.updated", "propertyKeys": ["sessionID", "info"], "info": {"id": "ses_fixture001", "time": {"created": 1793082115896, "updated": 1793082115926}}}
+{"type": "session.status", "propertyKeys": ["sessionID", "status"], "status": {"type": "busy"}}
+{"type": "session.error", "propertyKeys": ["sessionID", "error"]}
+{"type": "session.status", "propertyKeys": ["sessionID", "status"], "status": {"type": "idle"}}
+{"type": "session.idle", "propertyKeys": ["sessionID"]}

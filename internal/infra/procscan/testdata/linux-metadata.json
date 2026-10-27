@@ -1,0 +1,15 @@
+{
+  "system": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "ps_version": "ps from procps-ng 4.0.4",
+  "pid": 42001,
+  "ppid": 42000,
+  "cwd": "/fixture/work with spaces",
+  "run_id": "40462777677",
+  "head": "7e2fc7f0df9b9a7ebc8efa42a97474ad5917a042",
+  "pgid": 42002,
+  "runner": "ubuntu-24.04",
+  "locale": "C",
+  "timezone": "UTC",
+  "capture_date": "2026-10-27",
+  "artifact_sha256": "b07ca3634803ac251392565dd87310990384b0951fc2e270b757d65944ff0d08"
+}
