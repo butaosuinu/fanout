@@ -2,7 +2,8 @@
 
 [#865](https://github.com/butaosuinu/fanout/issues/865) の検出方針と、[#866](https://github.com/butaosuinu/fanout/issues/866) で採取した範囲を記録する。
 2026-10-27 採取。
-この PR は文書と fixtures のみで、外部行・installer・状態 reporter は実装しない。
+この PR は文書・fixtures と、それらのパスを分類するレビュー規則を変更する。
+外部行・installer・状態 reporter は実装しない。
 未確認の情報源は v1 では使わず、分類できる生存プロセスだけを `running` として表示する。
 
 ## 採取条件
