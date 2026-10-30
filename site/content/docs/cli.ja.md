@@ -12,7 +12,7 @@ yomi: reference
 ```text
 fanout # start the persistent tmux console
 fanout <parent-issue|project-url>
-       [--agent <name|NUM=name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--agent <selection|NUM=selection>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
@@ -24,7 +24,7 @@ fanout <parent-issue|project-url>
        [--pr-visualization|--no-pr-visualization]
        [--dashboard-keybind|--no-dashboard-keybind]
        [--team]
-fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
+fanout plan <spec.json|plan-slug> [--agent <selection|task-id=selection>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--team] [--base-branch <branch>]
        [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
@@ -91,7 +91,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 
 | フラグ | 引数 | 説明 |
 |---|---|---|
-| `--agent` | `<name>` または `<NUM>=<name>` | 子ペインで起動する agent CLI: `claude`、`codex`、`opencode`。`FANOUT_AGENT` 未設定なら必須。素の `--agent <name>` は全ての子の既定を設定し、繰り返し可能な `--agent <NUM>=<name>` 形式は子 issue（または Project item）1 件を番号で上書きする。例: `--agent codex --agent 456=claude`。各子はまず一致する per-target 上書きから agent を解決し、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決する。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認するが、いずれもその run で実際に選択された agent についてのみ行う。 |
+| `--agent` | `<selection>` または `<NUM>=<selection>` | `selection` は `name[:model[:effort]]`。name は `claude`、`codex`、`opencode`。bare 指定が全子の既定で、省略時は `FANOUT_AGENT`。繰り返し指定する `NUM=selection` は子 issue（または Project item）を上書きする。例: `--agent codex:gpt-6-astra:medium --agent 456=claude:opus:xhigh`。model / effort の空欄は同じ name の bare 指定から補う。形式・agent 名・対応フラグは起動前に検証し、model / effort 値の妥当性は agent CLI に委ねる。live 実行では選択対象の CLI のインストールも確認する。OpenCode は model のみ対応。Codex Plan/team lane の model/effort 指定は #791 まで拒否する。 |
 | `--backend` | `<tmux\|herdr>` | この run の runtime backend。既定: `tmux`。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は issue と Project の子をリポジトリの owned session で起動し、Codex 子の Plan Mode では fanout の app-server controller を使う。記録済みペインを持つ親は記録された backend を使い続け、矛盾する上書きは backend を混ぜずに失敗する。 |
 | `--session` | `<tmux-session>` | 起動元のペインではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
@@ -159,7 +159,7 @@ spec フォーマット:
 | `--backend` | `<tmux\|herdr>` | この plan run の runtime backend。`plan.source` が issue を指す plan はその issue の backend binding を共有し、issue-less の plan は現在の project の state 内で `plan:<slug>` 単位に sticky。herdr は task をリポジトリの owned session で起動する。 |
 | `--team` | — | その plan run を兄弟協調に opt-in する。issue モードと同じだが、peer は issue 番号ではなく **task ID** で指定する（issue-less な plan task には `#N` が無い）。plan の per-parent peer レジストリに seed し、各 task briefing に roster 節を付ける。plan に Codex team task が含まれるときのレジストリ preseed は fail-fast で、DB の失敗はペイン作成前に run を止める。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db`。tmux と herdr は同じ preseed / cleanup 経路を使う。plan の read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）とは併用不可。既定: off。 |
 
-`--agent` は issue モードと同じ働きですが、per-target 上書きは issue 番号ではなく task ID をキーにします。`--agent <name>` が既定を設定し、繰り返し可能な `--agent <task-id>=<name>` 形式が task 1 件を上書きします。各 task はまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決します。
+`--agent` は issue モードと同じ `name[:model[:effort]]` を使い、上書きのキーは issue 番号の代わりに task ID です。`--agent <selection>` が既定を設定し、繰り返し可能な `--agent <task-id>=<selection>` が task を上書きします。空欄は agent 名が一致する bare 指定からだけ補います。
 
 ```bash
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run

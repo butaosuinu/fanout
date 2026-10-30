@@ -175,7 +175,10 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
-	cfg := tuiIssueLaunchConfig(issueNum, defaultAgent, overrides)
+	cfg, err := tuiIssueLaunchConfig(issueNum, defaultAgent, overrides)
+	if err != nil {
+		return fanouttui.LaunchResult{}, err
+	}
 	if openChildren == 0 {
 		launchResult, launchErr := launchStandaloneIssuePaneWithResult(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, detail)
 		if launchErr != nil {
@@ -384,10 +387,11 @@ func fetchLaunchableIssue(projectRoot string, issueNum int) (ghissue.Issue, int,
 // and the launch lanes (validateIssueAgents / validateTaskAgents) already
 // install-check the agents of the targets they actually launch.
 func validateTUIAgentSelection(defaultAgent string, overrides map[string]string) error {
-	if err := agent.ValidateKnown(defaultAgent); err != nil {
+	selection, err := agent.ParseSelection(defaultAgent)
+	if err != nil {
 		return err
 	}
-	if err := agent.ValidateInstalled(defaultAgent); err != nil {
+	if err := agent.ValidateInstalled(selection.Name); err != nil {
 		return err
 	}
 	seen := map[string]bool{defaultAgent: true}
@@ -396,7 +400,7 @@ func validateTUIAgentSelection(defaultAgent string, overrides map[string]string)
 			continue
 		}
 		seen[name] = true
-		if err := agent.ValidateKnown(name); err != nil {
+		if _, err := agent.ParseSelection(name); err != nil {
 			return err
 		}
 	}
@@ -406,12 +410,11 @@ func validateTUIAgentSelection(defaultAgent string, overrides map[string]string)
 // tuiIssueLaunchConfig mirrors newWatchLaunchConfig but carries the user's
 // agent selection. UnblockedOnly stays true: the picker shows no blocker
 // info, and launchParentIssueFanout's deferred re-detection assumes it.
-func tuiIssueLaunchConfig(issueNum int, defaultAgent string, overrides map[string]string) *cliflags.Config {
+func tuiIssueLaunchConfig(issueNum int, defaultAgent string, overrides map[string]string) (*cliflags.Config, error) {
 	cfg := &cliflags.Config{
 		Parent:          issueNum,
 		ParentRef:       strconv.Itoa(issueNum),
 		ParentMode:      cliflags.ModeIssue,
-		Agent:           defaultAgent,
 		SleepBetween:    cliflags.DefaultSleepBetween,
 		PopupTimeoutSec: cliflags.DefaultPopupTimeout,
 		ProjectStatus:   cliflags.DefaultProjectStatus,
@@ -419,8 +422,15 @@ func tuiIssueLaunchConfig(issueNum int, defaultAgent string, overrides map[strin
 		UnblockedOnly:   true,
 		TUIInteractive:  true,
 	}
-	for target, name := range overrides {
-		cfg.AgentOverrides = cliflags.UpsertAgentOverride(cfg.AgentOverrides, target, name)
+	if err := cfg.SetAgent(defaultAgent); err != nil {
+		return nil, err
 	}
-	return cfg
+	for target, name := range overrides {
+		selection, err := agent.ParseSelection(name)
+		if err != nil {
+			return nil, err
+		}
+		cfg.AgentOverrides = cliflags.UpsertSelectionOverride(cfg.AgentOverrides, target, selection)
+	}
+	return cfg, nil
 }

@@ -3,6 +3,7 @@
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #101: First child
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-101.md
   slug -> first-child-101
   worktree -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/worktrees/first-child-101
@@ -17,6 +18,7 @@
     # would report display-only sidebar tokens with --source fanout to the child workspace and pane
 [ ok ] #101: dry-run complete
 [info] #102: Second child
+  agent -> claude
   briefing -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-102.md
   slug -> second-child-102
   worktree -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/worktrees/second-child-102

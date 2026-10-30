@@ -12,6 +12,115 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
+func TestSelectionGrammarAndResolution(t *testing.T) {
+	for _, raw := range []string{"claude", "claude:opus", "claude::xhigh", "codex:gpt-6-astra:medium", "opencode:provider/model"} {
+		s, err := ParseSelection(raw)
+		if err != nil || s.String() != raw {
+			t.Fatalf("ParseSelection(%q) = %+v, %v", raw, s, err)
+		}
+	}
+	for _, raw := range []string{"claude:", "claude::"} {
+		s, err := ParseSelection(raw)
+		if err != nil || s.String() != "claude" {
+			t.Fatalf("empty fields in %q: %+v, %v", raw, s, err)
+		}
+	}
+	for _, raw := range []string{"", ":opus", "unknown:x", "claude:a:b:c", "claude:a b", "codex::hi\tgh", "claude:x\x00", "opencode:x:high"} {
+		if _, err := ParseSelection(raw); err == nil {
+			t.Errorf("accepted %q", raw)
+		}
+	}
+	got := ResolveSelection(Selection{}, Selection{Name: "codex", Effort: "high"}, Selection{Name: "claude", Model: "opus"}, Selection{Name: "codex", Model: "gpt-6-astra", Effort: "low"})
+	if want := (Selection{Name: "codex", Model: "gpt-6-astra", Effort: "high"}); got != want {
+		t.Fatalf("ResolveSelection() = %+v, want %+v", got, want)
+	}
+	if got := ResolveSelection(Selection{Model: "orphan"}, Selection{Name: "codex"}); got != (Selection{Name: "codex"}) {
+		t.Fatalf("unnamed layer supplied a model: %+v", got)
+	}
+}
+
+// Exercise the same selection at every public launch/resume entrypoint. The
+// fake executable returns its argv so shell quoting is checked as well.
+func TestSelectionBuildEntrypoints(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range Supported() {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, sel := range []Selection{{Name: "claude", Model: "opus", Effort: "xhigh"}, {Name: "codex", Model: "gpt-6-astra", Effort: "medium"}, {Name: "opencode", Model: "provider/model"}} {
+		for _, runtime := range []backend.Name{backend.Tmux, backend.Herdr} {
+			t.Run(sel.Name+"/"+string(runtime), func(t *testing.T) {
+				flags := []string{"--model", sel.Model}
+				switch sel.Name {
+				case "claude":
+					flags = append(flags, "--effort", sel.Effort)
+				case "codex":
+					flags = append(flags, "-c", "model_reasoning_effort="+sel.Effort)
+				}
+				prompt := "inspect 'quoted' $input"
+				for _, build := range []struct {
+					name     string
+					resume   bool
+					injected bool
+					command  func() (string, error)
+				}{
+					{"dry", false, false, func() (string, error) {
+						return BuildSelectionCommandForBackendWithMode(sel, prompt, runtime, ModeBuild)
+					}},
+					{"live", false, false, func() (string, error) {
+						return BuildResolvedSelectionCommandForBackendWithMode(sel, prompt, runtime, ModeBuild)
+					}},
+					{"spec", false, false, func() (string, error) {
+						spec, err := BuildResolvedSelectionLaunchSpec(sel, prompt, runtime, ModeBuild)
+						return buildCommand(spec.Executable, spec.Args, "", ""), err
+					}},
+					{"injected spec", false, true, func() (string, error) {
+						spec, err := BuildResolvedSelectionLaunchSpecWithBackendArgs(sel, prompt, runtime, ModeBuild, []string{"--settings", "telemetry-json"})
+						return buildCommand(spec.Executable, spec.Args, "", ""), err
+					}},
+					{"resume", true, false, func() (string, error) { return BuildSelectionResumeCommandForBackend(sel, runtime) }},
+					{"resolved resume", true, false, func() (string, error) { return BuildResolvedSelectionResumeCommandForBackend(sel, runtime) }},
+				} {
+					t.Run(build.name, func(t *testing.T) {
+						command, err := build.command()
+						if err != nil {
+							t.Fatal(err)
+						}
+						out, err := exec.Command("/bin/sh", "-c", command).CombinedOutput()
+						if err != nil {
+							t.Fatalf("%v: %s", err, out)
+						}
+						var want []string
+						if build.injected {
+							want = append(want, "--settings", "telemetry-json")
+						}
+						if sel.Name == "claude" && runtime == backend.Tmux {
+							want = append(want, "--settings", claudeHookSettingsJSON)
+						}
+						if !build.resume {
+							want = append(want, registry[sel.Name].ModeArgs[ModeBuild]...)
+						}
+						want = append(want, flags...)
+						if build.resume {
+							want = append(want, registry[sel.Name].ResumeArgs...)
+						} else {
+							if sel.Name == "opencode" {
+								want = append(want, "--prompt")
+							}
+							want = append(want, prompt)
+						}
+						if got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"); !slices.Equal(got, want) {
+							t.Fatalf("argv = %q, want %q", got, want)
+						}
+					})
+				}
+			})
+		}
+	}
+}
+
 // TestClaudeHookSettingsJSONPinsAgentStateHooks pins the exact inline
 // --settings JSON injected into claude launches: key order (dry-run goldens
 // embed the string verbatim), the event -> @fanout_agent_state mapping, the

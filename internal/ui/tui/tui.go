@@ -309,7 +309,7 @@ func normalizeOptions(opts Options) Options {
 	if opts.lifecycle == nil {
 		opts.lifecycle = defaultLifecycleRunner{}
 	}
-	if agent.ValidateKnown(opts.DefaultAgent) != nil {
+	if _, err := agent.ParseSelection(opts.DefaultAgent); err != nil {
 		opts.DefaultAgent = defaultLaunchAgent
 	}
 	if opts.FocusPane == nil {

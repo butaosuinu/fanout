@@ -291,6 +291,20 @@ func TestParsePlanAgentOverrides(t *testing.T) {
 	}
 }
 
+func TestParsePlanAgentSelection(t *testing.T) {
+	cfg := parsePlanOK(t, "launch-plan", "--agent", "codex:gpt-6-astra:medium", "--agent", "api-client=codex::high")
+	if got := cfg.CLIConfig().EffectiveSelection("api-client").String(); got != "codex:gpt-6-astra:high" {
+		t.Fatalf("plan selection = %q", got)
+	}
+}
+
+func TestParsePlanAgentSelectionPreservesEqualsInModel(t *testing.T) {
+	cfg := parsePlanOK(t, "launch-plan", "--agent", "codex:model=version:low", "--agent", "api-client=codex:other=version")
+	if cfg.Model != "model=version" || cfg.CLIConfig().EffectiveSelection("api-client").Model != "other=version" {
+		t.Fatalf("model values changed: %+v", cfg)
+	}
+}
+
 func TestParsePlanAgentOverrideRejectsInvalidShapes(t *testing.T) {
 	for _, tc := range []struct {
 		name string

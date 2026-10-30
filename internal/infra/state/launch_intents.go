@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
@@ -184,6 +185,8 @@ type LaunchCapsule struct {
 	PendingReportedSeq   uint64                   `json:"pendingReportedSequence,omitempty"`
 	PendingAgentSession  *backend.AgentSessionRef `json:"pendingAgentSession,omitempty"`
 	Agent                string                   `json:"agent"`
+	Model                string                   `json:"model,omitempty"`
+	Effort               string                   `json:"effort,omitempty"`
 	AgentName            string                   `json:"agentName"`
 	Executable           string                   `json:"executable"`
 	ConsoleShell         string                   `json:"consoleShell,omitempty"`
@@ -195,6 +198,10 @@ type LaunchCapsule struct {
 	EnvNameCount         int                      `json:"envNameCount"`
 	LauncherReady        bool                     `json:"launcherReady,omitempty"`
 	TokenIssued          bool                     `json:"tokenIssued,omitempty"`
+}
+
+func (l LaunchCapsule) Selection() agent.Selection {
+	return agent.Selection{Name: l.Agent, Model: l.Model, Effort: l.Effort}
 }
 
 // LaunchJournal is the repository-common intent journal. It holds intents
@@ -880,9 +887,13 @@ func validateResumeFields(intent LaunchIntent) error {
 }
 
 func validResumeLaunch(launch *LaunchCapsule, ref *backend.AgentSessionRef) bool {
-	return validCodexSessionRef(ref) && launch != nil && launch.Agent == "codex" &&
-		launch.AgentName == "" && len(launch.Args) == 2 && launch.Args[0] == "resume" &&
-		launch.Args[1] == ref.Value
+	if !validCodexSessionRef(ref) || launch == nil || launch.Agent != "codex" || launch.AgentName != "" {
+		return false
+	}
+	args, err := agent.BuildResumeArgsForBackend(
+		launch.Selection(), backend.Herdr, ref.Value,
+	)
+	return err == nil && slices.Equal(launch.Args, args)
 }
 
 func validCodexSessionRef(ref *backend.AgentSessionRef) bool {

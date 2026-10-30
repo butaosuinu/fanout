@@ -119,7 +119,7 @@ func TestPrepareTaskLaunchDefersBackendUntilTargetAndAgentValidate(t *testing.T)
 				return nil
 			}}
 			cfg := &cliflags.Config{Agent: test.agentName, DryRun: true}
-			got := prepareTaskLaunch(cfg, taskPlan{Targets: test.targets}, rt, log.NewWith(io.Discard, io.Discard, false))
+			got := prepareTaskLaunch(cfg, false, taskPlan{Targets: test.targets}, rt, log.NewWith(io.Discard, io.Discard, false))
 			if got != test.wantOK || calls != test.wantCalls {
 				t.Fatalf("prepareTaskLaunch() = %t, calls %d; want %t, %d", got, calls, test.wantOK, test.wantCalls)
 			}

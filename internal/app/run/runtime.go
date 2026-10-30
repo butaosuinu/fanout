@@ -2,7 +2,6 @@ package run
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
@@ -100,11 +99,8 @@ func ResolveRuntime(cfg *cliflags.Config, selection backend.Selection, runtimeBa
 		return nil, exitcode.Env
 	}
 
-	if cfg.Agent == "" {
-		cfg.Agent = os.Getenv("FANOUT_AGENT")
-	}
-	if cfg.Agent == "" && len(cfg.AgentOverrides) == 0 {
-		lg.Err("agent is required; pass --agent <name> or set FANOUT_AGENT")
+	if err := resolveDefaultAgent(cfg); err != nil {
+		lg.Err("%v", err)
 		return nil, exitcode.Env
 	}
 

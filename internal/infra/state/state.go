@@ -97,6 +97,8 @@ type Pane struct {
 	SourceIssueNum int    `json:"sourceIssueNum,omitempty"`
 	SourceTaskID   string `json:"sourceTaskId,omitempty"`
 	Agent          string `json:"agent"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
 	// PlanMode は解決済みの Codex Plan Mode 設定(app-server Plan Mode thread +
 	// 対話 Codex TUI)で起動したペインかどうか。ダッシュボードの GET /api/plan が
 	// plan 抽出の対象ペインを限定するために参照する。additive なフィールドなので

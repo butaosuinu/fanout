@@ -17,6 +17,20 @@
 
 load helpers
 
+@test "scenario-agent-selection: issue overrides retain model and effort" {
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --agent 'codex:gpt-6-astra:medium' --agent '101=claude:opus:xhigh'
+  assert_success
+  assert_golden scenario-agent-selection
+}
+
+@test "scenario-plan-agent-selection: task overrides inherit matching model" {
+  use_fixture scenario-plan-basic
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --agent 'codex:gpt-6-astra:medium' --agent 'base-types=codex::high'
+  assert_success
+  assert_golden scenario-plan-agent-selection
+}
+
 @test "scenario-sub-issue-only: two OPEN children from Sub-issues API" {
   use_fixture scenario-sub-issue-only
   run_fanout_dry 100

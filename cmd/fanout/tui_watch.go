@@ -177,7 +177,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 			_ = recorder.Unlock()
 		}()
 	}
-	if err := admitStandaloneIssueRuntime(projectRoot, cfg, rt, store, issue.Number); err != nil {
+	if err := admitStandaloneIssueRuntime(projectRoot, cfg, rt, store, issue.Number, resolvedSettings.ChildPlanMode); err != nil {
 		return tuiPaneLaunchResult{}, err
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
@@ -193,7 +193,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 	return tuiPaneLaunchResult{Result: result, Binding: tuiLaunchBinding(store, req, result.PaneID)}, nil
 }
 
-func admitStandaloneIssueRuntime(projectRoot string, cfg *cliflags.Config, rt *run.Runtime, store state.Store, issueNum int) error {
+func admitStandaloneIssueRuntime(projectRoot string, cfg *cliflags.Config, rt *run.Runtime, store state.Store, issueNum int, planMode bool) error {
 	if rt.VerifyBackend != nil {
 		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
 			return fmt.Errorf("runtime backend: %w", err)
@@ -202,7 +202,7 @@ func admitStandaloneIssueRuntime(projectRoot string, cfg *cliflags.Config, rt *r
 	if hasRecordedIssuePane(projectRoot, store, issueNum) {
 		return watch.ErrAlreadyFanned
 	}
-	if err := validateStandaloneIssueAgent(cfg, issueNum); err != nil {
+	if err := validateStandaloneIssueAgent(cfg, issueNum, planMode); err != nil {
 		return err
 	}
 	if err := rt.PrepareLaunchBackend(); err != nil {
@@ -211,18 +211,18 @@ func admitStandaloneIssueRuntime(projectRoot string, cfg *cliflags.Config, rt *r
 	return nil
 }
 
-func validateStandaloneIssueAgent(cfg *cliflags.Config, issueNum int) error {
-	agentName := cfg.EffectiveAgentForIssue(issueNum)
-	if agentName == "" {
+func validateStandaloneIssueAgent(cfg *cliflags.Config, issueNum int, planMode bool) error {
+	selection := cfg.EffectiveSelection(strconv.Itoa(issueNum))
+	if selection.Name == "" {
 		return fmt.Errorf("#%d: agent is required", issueNum)
 	}
-	if err := agent.ValidateKnown(agentName); err != nil {
+	if err := panelaunch.ValidateSelection(selection, planMode, cfg.Team); err != nil {
 		return err
 	}
 	if cfg.DryRun {
 		return nil
 	}
-	return agent.ValidateInstalled(agentName)
+	return agent.ValidateInstalled(selection.Name)
 }
 
 func launchParentIssueFanoutWithPlanInput(projectRoot, session, commandName string, cfg *cliflags.Config, input run.IssuePlanInput) (watch.ParentLaunchResult, error) {
@@ -345,11 +345,14 @@ func tuiIssueBindings(store state.Store, captured bool, parent string, issueNums
 }
 
 func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int) *cliflags.Config {
+	selection := watcherSelection(resolvedSettings)
 	return &cliflags.Config{
 		Parent:          parent,
 		ParentRef:       strconv.Itoa(parent),
 		ParentMode:      cliflags.ModeIssue,
-		Agent:           watcherAgent(resolvedSettings),
+		Agent:           selection.Name,
+		Model:           selection.Model,
+		Effort:          selection.Effort,
 		PlanMode:        new(resolvedSettings.ChildPlanMode),
 		Limit:           limit,
 		SleepBetween:    cliflags.DefaultSleepBetween,
@@ -366,11 +369,13 @@ func newWatcherPreflightConfig(resolvedSettings settings.Settings) *cliflags.Con
 	return cfg
 }
 
-func watcherAgent(resolvedSettings settings.Settings) string {
+func watcherSelection(resolvedSettings settings.Settings) agent.Selection {
 	if agentName := strings.TrimSpace(resolvedSettings.WatcherAgent); agentName != "" {
-		return agentName
+		return agent.Selection{Name: agentName}
 	}
-	return defaultTUIAgent()
+	// defaultTUIAgent already parses the selection and replaces invalid input.
+	selection, _ := agent.ParseSelection(defaultTUIAgent())
+	return selection
 }
 
 func countOpenChildTargets(gh ghissue.Runner, parent int) (int, error) {

@@ -165,7 +165,7 @@ func agentFlagsForIssues(cfg *cliflags.Config, issues []ghissue.Issue) string {
 	for _, issue := range issues {
 		wanted[strconv.Itoa(issue.Number)] = true
 	}
-	return agentFlagsForTargets(cfg.Agent, cfg.AgentOverrides, wanted)
+	return agentFlagsForTargets(cfg.EffectiveSelection("").String(), cfg.AgentOverrides, wanted)
 }
 
 func agentFlagsForTasks(agentName string, overrides []cliflags.AgentOverride, tasks []planspec.Task) string {
@@ -183,7 +183,7 @@ func agentFlagsForTargets(agentName string, overrides []cliflags.AgentOverride, 
 	}
 	for _, override := range overrides {
 		if wanted[override.Target] {
-			flags = append(flags, optFlag("--agent", override.Target+"="+override.Name))
+			flags = append(flags, optFlag("--agent", override.Target+"="+override.Selection().String()))
 		}
 	}
 	return strings.Join(flags, "")
