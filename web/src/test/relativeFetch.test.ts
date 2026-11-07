@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { server } from "./server";
 
 /* setup.ts のコメントの実証テスト: アプリは相対 URL(/api/…)で fetch するが、
@@ -12,5 +12,17 @@ describe("テスト環境の前提", () => {
     const res = await fetch("/api/echo");
     expect(res.ok).toBe(true);
     expect(await res.json()).toEqual({ ok: true });
+  });
+
+  /* 統合テスト群は「handler の無い /api/… は素通しできない」を前提に常設 handler
+   * を置いている。msw 3 で onUnhandledRequest は onUnhandledFrame に改名された。
+   * 名前がずれて既定の warn に戻ると、取りこぼした fetch が黙って外へ出る。
+   * 素通しでも localhost への接続拒否で reject するので、reject だけでは区別できない。
+   * "error" strategy は console.error、"warn" は console.warn で報告する。 */
+  it("handler の無いリクエストは onUnhandledFrame:error で失敗する", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => error.mockRestore());
+    await expect(fetch("/api/no-handler")).rejects.toThrow();
+    expect(error).toHaveBeenCalled();
   });
 });

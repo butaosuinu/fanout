@@ -39,7 +39,7 @@ beforeEach(() => {
   /* 既定はコンパクトだが、本ファイルの大半は表示モードと無関係なので全画面に
    * 固定して読みやすくする。モード自体は下の 3 本で押さえる。 */
   localStorage.setItem("fanout.diffView", "full");
-  /* Drawer を開くと PeekPanel が /api/peek を叩く(onUnhandledRequest:"error"
+  /* Drawer を開くと PeekPanel が /api/peek を叩く(onUnhandledFrame:"error"
    * のため素通しできない)。本ファイルの関心対象ではないので常設で応える。 */
   server.use(
     http.get("/api/peek", () =>
