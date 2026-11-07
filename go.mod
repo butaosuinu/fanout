@@ -1,6 +1,6 @@
 module github.com/butaosuinu/fanout
 
-go 1.26.6
+go 1.26.10
 
 require (
 	github.com/butaosuinu/godep-cruiser v0.3.0
@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.0.0
 	github.com/charmbracelet/x/ansi v0.8.0
 	github.com/charmbracelet/x/term v0.2.1
+	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.52.0
 )
 
@@ -30,9 +31,8 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	golang.org/x/vuln v1.6.0 // indirect
 	modernc.org/libc v1.72.3 // indirect

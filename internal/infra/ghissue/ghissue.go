@@ -84,6 +84,11 @@ type PRRef struct {
 	// PR list is not proof that the PR lives here — and `gh pr merge <N> -R <this
 	// repo>` would resolve that number against the wrong repository.
 	BaseRepo string `json:"baseRepo,omitempty"`
+	// Stack is the pull request's GitHub-native stack, when it belongs to one.
+	// Only the dashboard poller and the TUI's PR column fill it (see PRStacks);
+	// every other path leaves it nil. A pointer, so omitempty drops it and
+	// existing JSON stays unchanged.
+	Stack *PRStack `json:"stack,omitempty"`
 }
 
 func (pr PRRef) DisplayState() string {
@@ -725,7 +730,7 @@ func parseIssueDetailsBatch(out []byte, nums []int) (map[int]IssueSnapshot, []in
 	var loadErr error
 	globalError := false
 	for _, graphErr := range root.Errors {
-		alias := issueAliasFromPath(graphErr.Path)
+		alias := aliasFromPath(graphErr.Path, "issue_")
 		if alias == "" {
 			globalError = true
 			loadErr = errors.Join(loadErr, fmt.Errorf("gh api graphql issue batch: %s", graphErr.Message))
@@ -779,10 +784,10 @@ func parseIssueDetailsBatch(out []byte, nums []int) (map[int]IssueSnapshot, []in
 	return snapshots, fallback, loadErr
 }
 
-func issueAliasFromPath(path []json.RawMessage) string {
+func aliasFromPath(path []json.RawMessage, prefix string) string {
 	for _, raw := range path {
 		var field string
-		if err := json.Unmarshal(raw, &field); err == nil && strings.HasPrefix(field, "issue_") {
+		if err := json.Unmarshal(raw, &field); err == nil && strings.HasPrefix(field, prefix) {
 			return field
 		}
 	}
@@ -1353,6 +1358,7 @@ func parseProjectPage(raw []byte, entryField string) (projectPage, error) {
 var (
 	rePositiveCommentID = regexp.MustCompile(`^[1-9][0-9]*$`)
 	taskListRE          = regexp.MustCompile(`^\s*-\s+\[[ xX]\]\s*#([0-9]+)`)
+	taskListRegionRE    = regexp.MustCompile(`(?s)<!-- fanout:start -->(.*?)(?:<!-- fanout:end -->|$)`)
 	waveHeadingRE       = regexp.MustCompile(`(?i)^wave\s*([0-9]+)`)
 )
 
@@ -1360,9 +1366,16 @@ var (
 // parent body. Cross-repo refs (`owner/repo#N`) are silently ignored: the
 // regex only matches `#N` immediately after the checkbox.
 //
-// Order is preserved (first appearance wins) and duplicates collapsed, to
-// match the bash jq pipeline that runs `unique` before iterating.
+// If fanout:start markers exist, only their regions (through fanout:end or
+// end of body) are scanned. Numbers are sorted and duplicates collapsed.
 func TaskListNumbers(parentBody string) []int {
+	var regions []string
+	for _, match := range taskListRegionRE.FindAllStringSubmatch(parentBody, -1) {
+		regions = append(regions, match[1])
+	}
+	if len(regions) > 0 {
+		parentBody = strings.Join(regions, "\n")
+	}
 	seen := map[int]bool{}
 	var out []int
 	for line := range strings.SplitSeq(parentBody, "\n") {

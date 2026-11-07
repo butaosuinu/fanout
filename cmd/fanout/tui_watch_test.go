@@ -95,6 +95,17 @@ func TestLaunchStandaloneIssuePaneReportsClaudeModeFallback(t *testing.T) {
 	}
 }
 
+func TestTUIWatcherAfterLaunchSyncsDashboardOwnersWithoutANotice(t *testing.T) {
+	syncCalls := 0
+	watcher := &tuiWatcher{dashboardOwnerSync: func() { syncCalls++ }}
+
+	watcher.afterLaunch("")
+
+	if syncCalls != 1 || len(watcher.notices) != 0 {
+		t.Fatalf("watcher post-launch = sync:%d notices:%v, want one sync without a notice", syncCalls, watcher.notices)
+	}
+}
+
 func TestWatcherParentCandidateFetchesGitHubDataOnce(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
 	installTUISequentialTmuxShim(t, repo)
@@ -125,6 +136,8 @@ esac
 	issue := ghissue.Issue{Number: 500, Title: "parent", State: "OPEN"}
 	runner := ghissue.Runner{Cwd: repo}
 	var listedLabels []string
+	dashboardOwnerSyncs := 0
+	watcher := &tuiWatcher{dashboardOwnerSync: func() { dashboardOwnerSyncs++ }}
 	engine := watch.NewEngine(watch.Config{
 		TriggerLabel: "fanout:auto",
 		RunningLabel: "fanout:running",
@@ -137,7 +150,7 @@ esac
 			return nil, nil
 		},
 		PlanChildren: func(issue ghissue.Issue) (watch.ChildPlan, error) {
-			return newWatchParentChildPlan(repo, "fanout-test", "fanout", settings.Defaults(), &tuiWatcher{}, runner, issue)
+			return newWatchParentChildPlan(repo, "fanout-test", "fanout", settings.Defaults(), watcher, runner, issue)
 		},
 		SwapLabels: func(ghissue.Issue, string, string) error {
 			return nil
@@ -161,6 +174,9 @@ esac
 	}
 	if got := strings.Join(listedLabels, ","); got != "fanout:auto,fanout:running" {
 		t.Fatalf("listed labels = %q, want one trigger and one running query", got)
+	}
+	if dashboardOwnerSyncs != 1 {
+		t.Fatalf("dashboard owner syncs = %d, want one after parent launch", dashboardOwnerSyncs)
 	}
 
 	body, err := os.ReadFile(argsPath)
@@ -221,9 +237,9 @@ func TestTUIIssueAndProjectHerdrLaunchFailuresDoNotPersistPanes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := t.TempDir()
 			initTUITestGitRepo(t, repo)
+			isolateBackendEnv(t)
 			t.Setenv("HERDR_ENV", "1")
 			t.Setenv("TMUX", "nested-tmux")
-			t.Setenv("FANOUT_BACKEND", "")
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			err := tt.launch(repo)
 			if err == nil {
@@ -251,9 +267,9 @@ func TestWatcherLaunchConfigAllowsHerdrSelection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := t.TempDir()
 			gitCmdTest(t, repo, "init", "-b", "main")
+			isolateBackendEnv(t)
 			t.Setenv("HERDR_ENV", tt.herdrEnv)
 			t.Setenv("TMUX", tt.tmuxEnv)
-			t.Setenv("FANOUT_BACKEND", "")
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			if tt.userConfig {
 				path := settings.UserConfigPath()

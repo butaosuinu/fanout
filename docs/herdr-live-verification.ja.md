@@ -316,9 +316,9 @@ codex から direct agent へ広げました (`directAgentIntegrationLaunch`)。
 偽の unix socket を立てて `~/.claude/hooks/herdr-agent-state.sh` を直接叩き、
 3 つが揃ったときだけ `source: "herdr:claude"` の `pane.report_agent_session` が
 飛ぶことを確認しました。hook 自体は `~/.claude/` にあり、owned session が隔離する
-XDG root の外なので移設は要りません。attach で起動した agent は coordinator
-workspace で動き、この grant の対象外のままです
-([#732](https://github.com/butaosuinu/fanout/issues/732))。
+XDG root の外なので移設は要りません。
+attach で起動した agent も provider CLI を直接実行するため、worktree 子と同じ grant の対象です。
+fanout を exec する controller と agent workload を持たない coordinator scaffold は対象外です ([#732](https://github.com/butaosuinu/fanout/issues/732))。
 
 session を束縛すると `/clear` で 2 つ問題が出るので同時に直しました。実測は
 使い捨て clone (`/private/tmp`) の owned session で取り、merge base の binary で
@@ -382,11 +382,13 @@ tmux レーンは `git worktree remove --force`
 `herdr worktree remove --workspace <id> --json`
 (`internal/infra/herdrrun/launch_operations.go:418`) で、後者に force はありません。
 agent がファイルを触った子で `--close` すると次を返して state を残します。
+JSON 本文は 2026-08-22 に XDG 四 root と socket を `/private/tmp` へ隔離し、
+herdr 0.8.2 の dirty worktree に対して再採取しました。
 
 ```
 [err ] #676: Herdr worktree cleanup failed; preserving state:
   herdr lifecycle requires manual cleanup: exit status 1:
-  {"error":{"code":"dirty_worktree_requires_force", …}}
+  {"error":{"code":"dirty_worktree_requires_force","message":"fatal: '/private/tmp/f743env.6EneFi/worktrees/probe' contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}
 ```
 
 固定化するのはここからです。`markWorkspaceCleanupManual` が intent を

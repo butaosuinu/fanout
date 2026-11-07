@@ -116,35 +116,11 @@ func startCodexRemoteTUISession(cfg codexRemoteTUIConfig) (_ *codexRemoteTUISess
 	}()
 	session.signals, session.stopSignalCleanup = installCodexControllerSignals()
 
-	session.server, err = startAppServer(cfg.CodexPath)
-	if err != nil {
+	if err = session.startServer(cfg); err != nil {
 		return nil, err
 	}
 
-	session.client, err = connectAppServerWithSignals(session.server, codexRemoteAppConnectTimeout, session.signals)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = waitForCodexOperation(session.signals, func() (struct{}, error) {
-		return struct{}{}, initializeCodexClient(session.client, cfg.Version, cfg.ClientName)
-	}); err != nil {
-		return nil, err
-	}
-
-	session.thread = codexThreadInfo{
-		ID:        strings.TrimSpace(cfg.ResumeThreadID),
-		SessionID: strings.TrimSpace(cfg.ResumeSessionID),
-	}
-	if session.thread.ID != "" && session.thread.SessionID == "" {
-		session.thread.SessionID = session.thread.ID
-	}
-	session.freshThread = session.thread.ID == ""
-	resumeID := codexRemoteTUIResumeID(session.thread)
-	if session.freshThread {
-		resumeID = ""
-	}
-	session.tui, session.tuiDone, err = startCodexRemoteTUI(cfg.CodexPath, session.server.Addr, resumeID, cfg.Stdout, cfg.Stderr)
-	if err != nil {
+	if err = session.attachTUI(cfg); err != nil {
 		return nil, err
 	}
 	session.setDrainDone(completedAppServerDrain())
@@ -153,13 +129,104 @@ func startCodexRemoteTUISession(cfg codexRemoteTUIConfig) (_ *codexRemoteTUISess
 		return nil, err
 	}
 	session.setDrainDone(drainDone)
-	if session.freshThread {
-		session.thread, err = waitForCodexRemoteTUIThread(session.tuiDone, session.client, session.server, cfg.SetAgentState, codexRemoteTUIThreadStartupTimeout, session.signals)
-		if err != nil {
-			return nil, err
-		}
+	if err = session.observeThread(cfg); err != nil {
+		return nil, err
 	}
 	return session, nil
+}
+
+func (s *codexRemoteTUISession) attachTUI(cfg codexRemoteTUIConfig) (err error) {
+	s.thread = codexThreadInfo{
+		ID:        strings.TrimSpace(cfg.ResumeThreadID),
+		SessionID: strings.TrimSpace(cfg.ResumeSessionID),
+	}
+	if s.thread.ID != "" && s.thread.SessionID == "" {
+		s.thread.SessionID = s.thread.ID
+	}
+	s.freshThread = s.thread.ID == ""
+	resumeID := codexRemoteTUIResumeID(s.thread)
+	if s.freshThread {
+		resumeID = ""
+	}
+	s.tui, s.tuiDone, err = startCodexRemoteTUI(cfg.CodexPath, s.server.Addr, resumeID, cfg.Stdout, cfg.Stderr)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *codexRemoteTUISession) startServer(cfg codexRemoteTUIConfig) (err error) {
+	s.server, err = startAppServer(cfg.CodexPath)
+	if err != nil {
+		return err
+	}
+
+	s.client, err = connectAppServerWithSignals(s.server, codexRemoteAppConnectTimeout, s.signals)
+	if err != nil {
+		return err
+	}
+	if _, err = waitForCodexOperation(s.signals, func() (struct{}, error) {
+		return struct{}{}, initializeCodexClient(s.client, cfg.Version, cfg.ClientName)
+	}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *codexRemoteTUISession) observeThread(cfg codexRemoteTUIConfig) (err error) {
+	if s.freshThread {
+		s.thread, err = waitForCodexRemoteTUIThread(s.tuiDone, s.client, s.server, cfg.SetAgentState, codexRemoteTUIThreadStartupTimeout, s.signals)
+		// A fresh remote thread has no rollout until its first turn is accepted.
+		// Each controller subscribes after that acceptance, before its reader runs.
+		return err
+	}
+	_, err = waitForCodexOperation(s.signals, func() (struct{}, error) {
+		return struct{}{}, subscribeCodexRemoteTUIThread(s.client, s.thread.ID)
+	})
+	return err
+}
+
+func subscribeCodexRemoteTUIThread(client *client, threadID string) error {
+	deadline := time.Now().Add(codexRemoteTUIThreadStartupTimeout)
+	for {
+		err := resumeCodexRemoteTUIThread(client, threadID)
+		if !codexThreadPersistencePending(err) || time.Now().After(deadline) {
+			return err
+		}
+		// Codex can accept turn/start before the fresh rollout metadata is flushed.
+		// Retry only these explicit rejections, never a transport/unknown result.
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func codexThreadPersistencePending(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return (strings.Contains(message, "no rollout found for thread id ") && strings.HasSuffix(message, "(code -32600)")) ||
+		(strings.Contains(message, "rollout at ") && strings.HasSuffix(message, " is empty (code -32603)"))
+}
+
+func resumeCodexRemoteTUIThread(client *client, threadID string) error {
+	// Discovering the remote TUI's thread does not subscribe this connection.
+	// Resume by ID only: the TUI owns the thread's settings.
+	result, err := client.Request("fanout-subscribe", "thread/resume", map[string]any{"threadId": threadID})
+	if err != nil {
+		return err
+	}
+	thread, err := parseThreadStart(result)
+	if err != nil {
+		return err
+	}
+	if thread.ID != threadID {
+		return fmt.Errorf("codex thread/resume returned thread %q, want %q", thread.ID, threadID)
+	}
+	// Replay the resume snapshot after earlier notifications, before any later
+	// events. Both controllers keep one reader across this startup handoff.
+	client.pending = append(client.pending, appServerMessage{Method: "thread/started", Params: result})
+	return nil
 }
 
 func (s *codexRemoteTUISession) Close() {
@@ -273,6 +340,8 @@ func (s *codexRemoteTUISession) currentShutdownSignal() os.Signal {
 // an existing one), attaches the interactive Codex TUI, starts the initial turn,
 // and reports readiness once that turn has been accepted. Plan generation and
 // approval remain owned by the TUI and are not bounded as startup work.
+//
+//nolint:funlen // Keep readiness publication and deferred reader/session shutdown in one ownership scope.
 func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 	ready := false
 	defer func() {
@@ -304,52 +373,52 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 	}
 	defer func() { err = session.finish(err) }()
 
-	thread := session.thread
-	freshThread := session.freshThread
-	var cwd string
-	if freshThread {
-		var cwdErr error
-		cwd, cwdErr = os.Getwd()
-		if cwdErr != nil {
-			return fmt.Errorf("resolve current directory: %w", cwdErr)
-		}
-	}
-
-	if freshThread {
-		thread, err = waitForCodexOperation(session.signals, func() (codexThreadInfo, error) {
-			return configureCodexPlanThread(session.client, thread, cwd)
-		})
-		if err != nil {
+	if session.freshThread {
+		if _, err = waitForCodexOperation(session.signals, func() (struct{}, error) {
+			return struct{}{}, session.startPlanTurn(cfg.Prompt, setState)
+		}); err != nil {
 			return err
-		}
-		reportCodexPlanAgentState(setState, "working")
-		var turnStart codexPlanTurnStartResult
-		turnStart, err = waitForCodexOperation(session.signals, func() (codexPlanTurnStartResult, error) {
-			return startCodexPlanTurn(session.client, thread, cwd, cfg.Prompt)
-		})
-		if err != nil {
-			return err
-		}
-		if turnStart.Completed {
-			session.setDrainDone(completedAppServerDrain())
-		} else {
-			session.setDrainDone(drainCodexAppServerDuringStartupCmd(session.client, setState, thread.ID, turnStart.TurnID))
 		}
 	}
 
 	if err = writeStatus(cfg.StatusFile, Status{
 		Status:    statusReady,
-		ThreadID:  thread.ID,
-		SessionID: thread.SessionID,
+		ThreadID:  session.thread.ID,
+		SessionID: session.thread.SessionID,
 		Remote:    session.server.Addr,
 	}); err != nil {
 		return fmt.Errorf("write Codex Plan TUI status: %w", err)
 	}
 	ready = true
-	tuiExited, err := waitForCodexTUIAfterReady(session.tuiDone, session.currentDrainDone(), session.client, setState, cfg.CapturePlanScreen, freshThread, false, session.signals)
+	tuiExited, err := waitForCodexTUIAfterReady(session.tuiDone, session.currentDrainDone(), session.client, setState, cfg.CapturePlanScreen, session.freshThread, false, session.signals)
 	session.setDrainDone(nil) // consumed or awaited inside waitForCodexTUIAfterReady
 	session.setTUIStopped(tuiExited)
 	return err
+}
+
+func (s *codexRemoteTUISession) startPlanTurn(prompt string, setState func(string)) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve current directory: %w", err)
+	}
+	thread, err := configureCodexPlanThread(s.client, s.thread, cwd)
+	if err != nil {
+		return err
+	}
+	reportCodexPlanAgentState(setState, "working")
+	turnStart, err := startCodexPlanTurn(s.client, thread, cwd, prompt)
+	if err != nil {
+		return err
+	}
+	if err = subscribeCodexRemoteTUIThread(s.client, thread.ID); err != nil {
+		return err
+	}
+	if turnStart.Completed {
+		s.setDrainDone(completedAppServerDrain())
+	} else {
+		s.setDrainDone(drainCodexAppServerDuringStartupCmd(s.client, setState, thread.ID, turnStart.TurnID))
+	}
+	return nil
 }
 
 func waitForCodexRemoteTUIStartup(tuiDone <-chan error, drainDone chan error, server *appServer, signalChannels ...<-chan os.Signal) (chan error, error) {
@@ -894,17 +963,8 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 			awaitDrainAfterTUIExit(client, drainDone)
 			return true, tuiErr
 		case drainErr := <-drainDone:
-			if !watchingAppServer {
+			if !watchingAppServer && drainErr == nil {
 				screenTracker.initialTurnCompleted()
-			}
-			if drainErr != nil {
-				if !watchingAppServer && canWatchAppServer(client) {
-					watchingAppServer = true
-					drainDone = drainCodexAppServerUntilClosedCmd(client, setState)
-					continue
-				}
-				drainDone = nil
-				continue
 			}
 			if !watchingAppServer && canWatchAppServer(client) {
 				watchingAppServer = true
@@ -953,6 +1013,9 @@ func newCodexPlanScreenTracker(capture func() (string, error), setState func(str
 func (t *codexPlanScreenTracker) initialTurnCompleted() {
 	if t != nil && t.phase == codexPlanScreenPlanning {
 		t.phase = codexPlanScreenAwaitingApproval
+		if t.capture == nil {
+			reportCodexPlanAgentState(t.setState, "idle")
+		}
 	}
 }
 
@@ -1147,6 +1210,9 @@ func codexTurnStartStatus(raw json.RawMessage) (string, string) {
 }
 
 func codexTurnCompletedNotification(msg appServerMessage, threadID, turnID string) codexTurnCompletion {
+	if msg.Method == "thread/started" {
+		return codexSnapshotTurnCompletion(msg.Params, threadID, turnID)
+	}
 	if msg.Method != "turn/completed" {
 		return codexTurnCompletion{}
 	}
@@ -1171,12 +1237,59 @@ func codexTurnCompletedNotification(msg appServerMessage, threadID, turnID strin
 	return codexTurnCompletion{Matched: true, Status: status}
 }
 
+func codexSnapshotTurnCompletion(raw json.RawMessage, threadID, turnID string) codexTurnCompletion {
+	var params struct {
+		Thread codexThreadSnapshot `json:"thread"`
+	}
+	if json.Unmarshal(raw, &params) != nil || params.Thread.ID != threadID {
+		return codexTurnCompletion{}
+	}
+	for _, turn := range params.Thread.Turns {
+		if turn.ID == turnID && isTerminalCodexTurnStatus(turn.Status) {
+			return codexTurnCompletion{Matched: true, Status: turn.Status}
+		}
+	}
+	return codexTurnCompletion{}
+}
+
 func codexTurnNotificationAgentState(msg appServerMessage) string {
+	if msg.Method == "thread/started" {
+		var params struct {
+			Thread codexThreadSnapshot `json:"thread"`
+		}
+		if json.Unmarshal(msg.Params, &params) == nil && params.Thread.Status.Type != "" {
+			return params.Thread.Status.agentState()
+		}
+	}
 	if msg.Method == "turn/started" {
 		return "working"
 	}
 	completion := anyCodexTurnCompletedNotification(msg)
 	return codexTurnCompletionAgentState(completion)
+}
+
+type codexThreadStatus struct {
+	Type        string   `json:"type"`
+	ActiveFlags []string `json:"activeFlags"`
+}
+
+type codexThreadSnapshot struct {
+	ID     string            `json:"id"`
+	Status codexThreadStatus `json:"status"`
+	Turns  []struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	} `json:"turns"`
+}
+
+func (s codexThreadStatus) agentState() string {
+	if s.Type == "idle" {
+		return "idle"
+	}
+	if slices.Contains(s.ActiveFlags, "waitingOnApproval") || slices.Contains(s.ActiveFlags, "waitingOnUserInput") {
+		return "blocked"
+	}
+	return "working"
 }
 
 func anyCodexTurnCompletedNotification(msg appServerMessage) codexTurnCompletion {

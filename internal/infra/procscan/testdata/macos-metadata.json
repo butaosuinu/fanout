@@ -1,0 +1,22 @@
+{
+  "os": "macOS 15.6",
+  "arch": "arm64",
+  "locale": "C",
+  "timezone": "Asia/Tokyo (host default)",
+  "ps_command": "ps -p <owned-sleep-pid> -o pid=,ppid=,pgid=,lstart=,comm=,args=",
+  "lsof_command": "lsof -a -d cwd -p <owned-sleep-pid> -Fn",
+  "lsof_ms": [
+    18.414,
+    15.773,
+    15.053,
+    14.806,
+    14.691
+  ],
+  "sample_count": 5,
+  "capture_date": "2026-10-27",
+  "substitutions": {
+    "pid": "42001",
+    "ppid_and_pgid": "42000",
+    "cwd": "/fixture/work"
+  }
+}

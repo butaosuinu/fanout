@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -13,7 +14,11 @@ import (
 
 const (
 	Command               = "__fanout-emitter"
+	SequenceCommand       = "__fanout-emitter-sequence"
 	EmitterTimeoutSeconds = 15
+	// SequencedSessionEndTimeoutSeconds covers the serial allocator and emitter
+	// budgets, plus one second for their shell handoff.
+	SequencedSessionEndTimeoutSeconds = 2*EmitterTimeoutSeconds + 1
 )
 
 const (
@@ -27,6 +32,7 @@ const (
 	SocketPathEnv     = "FANOUT_EMITTER_SOCKET_PATH"
 	WorkspaceIDEnv    = "FANOUT_EMITTER_WORKSPACE_ID"
 	WorkspaceLabelEnv = "FANOUT_EMITTER_WORKSPACE_LABEL"
+	WorktreePathEnv   = "FANOUT_EMITTER_WORKTREE_PATH"
 	PaneIDEnv         = "FANOUT_EMITTER_PANE_ID"
 	TerminalIDEnv     = "FANOUT_EMITTER_TERMINAL_ID"
 	AgentEnv          = "FANOUT_EMITTER_AGENT"
@@ -38,19 +44,22 @@ var noncePattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // Signal is one launch-bound provider state report. Its identity values are
 // comparison inputs, not secrets or capabilities.
 type Signal struct {
-	StatePath    string
-	RowKey       string
-	LaunchNonce  string
-	EmitterNonce string
-	Backend      backend.Name
-	Session      string
-	SocketPath   string
-	WorkspaceID  string
-	PaneID       string
-	TerminalID   string
-	Agent        string
-	AgentID      string
-	State        backend.AgentState
+	StatePath      string
+	RowKey         string
+	LaunchNonce    string
+	EmitterNonce   string
+	Backend        backend.Name
+	Session        string
+	SocketPath     string
+	WorkspaceID    string
+	WorkspaceLabel string
+	WorktreePath   string
+	PaneID         string
+	TerminalID     string
+	Agent          string
+	AgentID        string
+	State          backend.AgentState
+	Sequence       uint64
 }
 
 // IsRequest reports whether args target the hidden telemetry emitter.
@@ -58,28 +67,77 @@ func IsRequest(args []string) bool {
 	return len(args) > 0 && args[0] == Command
 }
 
+// IsSequenceRequest reports whether args target the synchronous sequence allocator.
+func IsSequenceRequest(args []string) bool {
+	return len(args) == 1 && args[0] == SequenceCommand
+}
+
+// SequencedClaudeLaunch reports whether persisted launch arguments carry the
+// sequence hook. LaunchArgs survive saves by older state writers, so this also
+// distinguishes bindings that must be fenced during a mixed-version upgrade.
+func SequencedClaudeLaunch(agent string, args []string) bool {
+	if agent != "claude" {
+		return false
+	}
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--settings" && strings.Contains(args[i+1], SequenceCommand) {
+			return true
+		}
+	}
+	return false
+}
+
+// ClaudeSequenceWatermarkMissing reports a refined sequenced launch whose
+// applied sequence was stripped by a writer that does not know the field.
+func ClaudeSequenceWatermarkMissing(agent string, args []string, refined bool, applied uint64) bool {
+	return refined && applied == 0 && SequencedClaudeLaunch(agent, args)
+}
+
 // ParseSignal validates one hidden-command invocation and its inherited wire
 // identity. getenv keeps parsing pure and directly testable.
 func ParseSignal(args []string, getenv func(string) string) (Signal, error) {
-	if len(args) != 1 {
-		return Signal{}, fmt.Errorf("expected one reported state")
+	agentName := getenv(AgentEnv)
+	wantArgs := 1
+	if agentName == "claude" {
+		wantArgs = 2
+	}
+	if len(args) != wantArgs {
+		return Signal{}, fmt.Errorf("expected one reported state and its required sequence")
 	}
 	state, ok := providerState(args[0])
 	if !ok {
 		return Signal{}, fmt.Errorf("unsupported reported state %q", args[0])
 	}
-	signal := Signal{
-		StatePath: getenv(StatePathEnv), RowKey: getenv(RowKeyEnv),
-		LaunchNonce: getenv(LaunchNonceEnv), EmitterNonce: getenv(EmitterNonceEnv),
-		Backend: backend.Name(getenv(BackendEnv)), Session: getenv(SessionEnv),
-		SocketPath: getenv(SocketPathEnv), WorkspaceID: getenv(WorkspaceIDEnv),
-		PaneID: getenv(PaneIDEnv), TerminalID: getenv(TerminalIDEnv),
-		Agent: getenv(AgentEnv), AgentID: getenv(AgentIDEnv), State: state,
+	var sequence uint64
+	if agentName == "claude" {
+		var err error
+		sequence, err = strconv.ParseUint(args[1], 10, 64)
+		if err != nil || sequence == 0 {
+			return Signal{}, fmt.Errorf("claude telemetry sequence is invalid")
+		}
 	}
+	signal := signalFromEnvironment(getenv, agentName, state, sequence)
 	if err := validateSignal(signal, getenv(EmitterPathEnv)); err != nil {
 		return Signal{}, err
 	}
 	return signal, nil
+}
+
+func signalFromEnvironment(
+	getenv func(string) string,
+	agentName string,
+	state backend.AgentState,
+	sequence uint64,
+) Signal {
+	return Signal{
+		StatePath: getenv(StatePathEnv), RowKey: getenv(RowKeyEnv),
+		LaunchNonce: getenv(LaunchNonceEnv), EmitterNonce: getenv(EmitterNonceEnv),
+		Backend: backend.Name(getenv(BackendEnv)), Session: getenv(SessionEnv),
+		SocketPath: getenv(SocketPathEnv), WorkspaceID: getenv(WorkspaceIDEnv),
+		WorkspaceLabel: getenv(WorkspaceLabelEnv), WorktreePath: getenv(WorktreePathEnv),
+		PaneID: getenv(PaneIDEnv), TerminalID: getenv(TerminalIDEnv),
+		Agent: agentName, AgentID: getenv(AgentIDEnv), State: state, Sequence: sequence,
+	}
 }
 
 func providerState(raw string) (backend.AgentState, bool) {
@@ -121,6 +179,24 @@ func validateRuntimeIdentity(signal Signal) error {
 	}
 	if !cleanAbsolute(signal.SocketPath) {
 		return fmt.Errorf("emitter socket path is not canonical and absolute")
+	}
+	return validateStableRowIdentity(signal)
+}
+
+func validateStableRowIdentity(signal Signal) error {
+	// An owned session can retain an older pinned pane launcher while routing
+	// hooks through the current emitter. That launcher binds the prior route
+	// fields but leaves this newer stable-identity pair empty.
+	if signal.WorkspaceLabel == "" && signal.WorktreePath == "" {
+		return nil
+	}
+	for _, value := range []string{signal.WorkspaceLabel, signal.WorktreePath} {
+		if value == "" || strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("emitter runtime identity is incomplete")
+		}
+	}
+	if !cleanAbsolute(signal.WorktreePath) {
+		return fmt.Errorf("emitter worktree path is not canonical and absolute")
 	}
 	return nil
 }

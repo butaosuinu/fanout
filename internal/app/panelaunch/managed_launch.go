@@ -308,7 +308,11 @@ func (l *Launcher) recordManagedCoordinator(
 	route backend.OwnedLaunchRoute,
 	livePanes []backend.LivePane,
 ) error {
-	if err := pruneDeadManagedCoordinatorRows(locked, route, livePanes); err != nil {
+	journal, err := locked.LaunchJournal(l.Info.ProjectRoot)
+	if err != nil {
+		return err
+	}
+	if err = pruneDeadManagedCoordinatorRows(locked, journal, route, livePanes); err != nil {
 		return err
 	}
 	runtimeParent := managedCoordinatorRuntimeParent(intent)
@@ -316,6 +320,15 @@ func (l *Launcher) recordManagedCoordinator(
 	if err != nil || recorded {
 		return err
 	}
+	return recordManagedCoordinatorRow(locked, intent, route, runtimeParent)
+}
+
+func recordManagedCoordinatorRow(
+	locked *state.LockedStore,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+	runtimeParent string,
+) error {
 	number := NextSyntheticPaneNumber(locked.Store, ManualParentRef)
 	if number == intent.IssueNum {
 		// The launch's own agent row lands on (ManualParentRef, IssueNum) at
@@ -332,8 +345,10 @@ func (l *Launcher) recordManagedCoordinator(
 // workspace from the Herdr side is an external cleanup; the launch-time live
 // pane observation proves the absence. Only rows in the exact coordinator role
 // shape qualify — agent, shell, and attached-agent rows are never touched.
+// Pending retirement keeps its row so cleanup can recover an ambiguous close.
 func pruneDeadManagedCoordinatorRows(
 	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
 	route backend.OwnedLaunchRoute,
 	livePanes []backend.LivePane,
 ) error {
@@ -342,7 +357,7 @@ func pruneDeadManagedCoordinatorRows(
 		return nil
 	}
 	for _, pane := range slices.Clone(locked.Panes) {
-		if !deadManagedCoordinatorRow(pane, route, livePanes) {
+		if !deadManagedCoordinatorRow(pane, route, livePanes) || pendingManagedCoordinatorRetirement(pane, journal) {
 			continue
 		}
 		if err := locked.RemovePane(pane.Parent, pane.IssueNum); err != nil {
@@ -439,6 +454,130 @@ func (l *Launcher) reconcileManagedCoordinatorRow(
 		return nil
 	}
 	return locked.RecordPane(managedCoordinatorPane(intent, route, runtimeParent, pane.IssueNum))
+}
+
+// ReconcileManagedCoordinatorReplanRow records the recreated coordinator after
+// lifecycle replanning reused RealizeManagedCoordinator. The previous label
+// nonce locates an existing owned row; a pruned row is safely recreated under
+// a fresh synthetic state key.
+func ReconcileManagedCoordinatorReplanRow(
+	locked *state.LockedStore,
+	predecessors []state.RuntimeResource,
+	current state.LaunchIntent,
+) error {
+	if locked == nil || !validManagedCoordinatorReplan(predecessors, current) {
+		return fmt.Errorf("replanned Herdr coordinator intent changed generation")
+	}
+	runtimeParent := managedCoordinatorRuntimeParent(current)
+	pane, found, err := findReplannedCoordinatorPane(locked.Store, runtimeParent, predecessors, current)
+	if err != nil {
+		return err
+	}
+	route := backend.OwnedLaunchRoute{Session: current.Session, SocketPath: current.SocketPath}
+	if !found {
+		return recordManagedCoordinatorRow(locked, current, route, runtimeParent)
+	}
+	return reconcileReplannedCoordinatorRow(locked, pane, predecessors, current, route, runtimeParent)
+}
+
+func findReplannedCoordinatorPane(
+	store state.Store,
+	runtimeParent string,
+	predecessors []state.RuntimeResource,
+	current state.LaunchIntent,
+) (state.Pane, bool, error) {
+	var match state.Pane
+	found := false
+	for _, pane := range store.Panes {
+		if !managedCoordinatorRowRole(pane) || pane.RuntimeParent != runtimeParent ||
+			!replannedCoordinatorLabel(pane.WorkspaceLabel, predecessors, current.Resource.Label) {
+			continue
+		}
+		if found {
+			return state.Pane{}, false, fmt.Errorf("replanned Herdr coordinator row is ambiguous")
+		}
+		match, found = pane, true
+	}
+	return match, found, nil
+}
+
+func replannedCoordinatorLabel(label string, predecessors []state.RuntimeResource, current string) bool {
+	if label == current {
+		return true
+	}
+	for _, predecessor := range predecessors {
+		if label == predecessor.Label {
+			return true
+		}
+	}
+	return false
+}
+
+func reconcileReplannedCoordinatorRow(
+	locked *state.LockedStore,
+	pane state.Pane,
+	predecessors []state.RuntimeResource,
+	current state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+	runtimeParent string,
+) error {
+	if err := validateReplannedCoordinatorRow(pane, predecessors, current, route); err != nil {
+		return err
+	}
+	if validateManagedCoordinatorPane(pane, current, route) == nil {
+		return nil
+	}
+	return locked.RecordPane(managedCoordinatorPane(current, route, runtimeParent, pane.IssueNum))
+}
+
+func validManagedCoordinatorReplan(predecessors []state.RuntimeResource, current state.LaunchIntent) bool {
+	if len(predecessors) == 0 || slices.Contains([]bool{
+		current.Kind == state.IntentCoordinator, current.Status == state.IntentRealized,
+		current.Parent == ManualParentRef, current.RuntimeParent == ManualParentRef,
+		current.IssueNum < 0, strings.TrimSpace(current.ID) != "",
+		strings.TrimSpace(current.OwnerProjectRoot) != "",
+		strings.TrimSpace(current.Session) != "", strings.TrimSpace(current.SocketPath) != "",
+		managedCoordinatorResourceComplete(current.Resource),
+		filepath.Clean(current.Resource.CurrentPath) == filepath.Clean(current.WorktreePath),
+	}, false) {
+		return false
+	}
+	for _, predecessor := range predecessors {
+		if !managedCoordinatorResourceComplete(predecessor) ||
+			filepath.Clean(predecessor.CurrentPath) != filepath.Clean(current.WorktreePath) {
+			return false
+		}
+	}
+	return true
+}
+
+func managedCoordinatorResourceComplete(resource state.RuntimeResource) bool {
+	return strings.TrimSpace(resource.WorkspaceID) != "" && strings.TrimSpace(resource.Label) != "" &&
+		strings.TrimSpace(resource.PaneID) != "" && strings.TrimSpace(resource.TerminalID) != "" &&
+		strings.TrimSpace(resource.CurrentPath) != ""
+}
+
+func validateReplannedCoordinatorRow(
+	pane state.Pane,
+	predecessors []state.RuntimeResource,
+	current state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+) error {
+	if pane.WorkspaceLabel == current.Resource.Label {
+		// The exact-role row carries the current ownership nonce. As in the
+		// normal launch path, differing runtime ids are stale move/restart data
+		// to heal, not an identity conflict.
+		return nil
+	}
+	for _, predecessor := range predecessors {
+		if pane.WorkspaceLabel != predecessor.Label {
+			continue
+		}
+		if validateManagedCoordinatorPane(pane, state.LaunchIntent{Resource: predecessor}, route) == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("saved Herdr coordinator row contradicts replanned intent")
 }
 
 func managedCoordinatorRowRoots(projectRoot, runtimeParent, ownerProjectRoot string) ([]string, error) {
@@ -969,6 +1108,7 @@ func applyManagedLaunchTelemetry(pane *state.Pane, intent state.LaunchIntent) {
 	}
 	pane.LaunchExecutable = launch.Executable
 	pane.LaunchArgs = slices.Clone(launch.Args)
+	pane.EmitterRebindNonce, pane.EmitterRebindSequence = "", 0
 	if launch.EmitterNonce == "" {
 		return
 	}
@@ -976,10 +1116,12 @@ func applyManagedLaunchTelemetry(pane *state.Pane, intent state.LaunchIntent) {
 	pane.LaunchNonce = launch.Nonce
 	pane.EmitterNonce = launch.EmitterNonce
 	pane.ReportedState = string(backend.AgentRunning)
+	pane.ReportedStateSeq = 0
 	pane.StateRefinement = false
 	if launch.PendingReportedState != "" && launch.PendingAgentSession != nil &&
 		pane.AgentSession != nil && *launch.PendingAgentSession == *pane.AgentSession {
 		pane.ReportedState = launch.PendingReportedState
+		pane.ReportedStateSeq = launch.PendingReportedSeq
 		pane.StateRefinement = true
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -39,15 +40,7 @@ func workspacesWithLabel(
 }
 
 func stateResource(observation backend.WorkspaceObservation) state.RuntimeResource {
-	return state.RuntimeResource{
-		WorkspaceID: observation.WorkspaceID,
-		Label:       observation.Label,
-		PaneID:      observation.Pane.Pane,
-		TerminalID:  observation.TerminalID,
-		CurrentPath: observation.CWD,
-		RepoKey:     observation.RepoKey,
-		RepoRoot:    observation.RepoRoot,
-	}
+	return state.RuntimeResourceFromObservation(observation)
 }
 
 func observationResource(resource state.RuntimeResource) backend.WorkspaceObservation {
@@ -100,6 +93,9 @@ func workspaceHasManagedResource(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
 ) bool {
+	expected.CurrentPath = state.CleanRuntimeResourcePath(expected.CurrentPath)
+	expected.RepoKey = state.CleanRuntimeResourcePath(expected.RepoKey)
+	expected.RepoRoot = state.CleanRuntimeResourcePath(expected.RepoRoot)
 	if observation.WorkspaceID != expected.WorkspaceID ||
 		observation.Label != expected.Label ||
 		!workspaceProvenanceMatches(observation, expected) {
@@ -116,6 +112,103 @@ func workspaceHasManagedResource(
 	return false
 }
 
+// restartedManagedWorktreeResource admits the one cold-restart change: a new
+// terminal identity on the exact saved workspace, pane, label, checkout, and
+// repository provenance.
+func restartedManagedWorktreeResource(
+	observation backend.WorkspaceObservation,
+	expected state.RuntimeResource,
+) (state.RuntimeResource, bool) {
+	if !workspaceHasExactRestartProvenance(observation, expected) {
+		return state.RuntimeResource{}, false
+	}
+	terminals := restartedManagedTerminals(observation, expected)
+	if len(terminals) != 1 {
+		return state.RuntimeResource{}, false
+	}
+	expected.TerminalID = terminals[0]
+	return expected, true
+}
+
+func workspaceHasExactRestartProvenance(
+	observation backend.WorkspaceObservation,
+	expected state.RuntimeResource,
+) bool {
+	requirements := []bool{
+		managedWorktreeRestartResourceComplete(expected),
+		observation.WorkspaceID == expected.WorkspaceID,
+		observation.Label == expected.Label,
+		filepath.Clean(observation.Path) == filepath.Clean(expected.CurrentPath),
+		state.CleanRuntimeResourcePath(observation.RepoKey) == state.CleanRuntimeResourcePath(expected.RepoKey),
+		state.CleanRuntimeResourcePath(observation.RepoRoot) == state.CleanRuntimeResourcePath(expected.RepoRoot),
+	}
+	return !slices.Contains(requirements, false)
+}
+
+func managedWorktreeRestartResourceComplete(resource state.RuntimeResource) bool {
+	requirements := []string{
+		resource.WorkspaceID, resource.Label, resource.PaneID, resource.TerminalID,
+		resource.CurrentPath, resource.RepoKey, resource.RepoRoot,
+	}
+	return !slices.ContainsFunc(requirements, func(value string) bool {
+		return strings.TrimSpace(value) == ""
+	})
+}
+
+func restartedManagedTerminals(
+	observation backend.WorkspaceObservation,
+	expected state.RuntimeResource,
+) []string {
+	var terminals []string
+	if len(observation.Panes) == 0 {
+		if terminalID, found := restartedManagedTerminal(
+			observation.Pane, observation.TerminalID, observation.CWD, expected,
+		); found {
+			terminals = append(terminals, terminalID)
+		}
+	}
+	for _, pane := range observation.Panes {
+		if terminalID, found := restartedManagedTerminal(pane.Pane, pane.TerminalID, pane.CWD, expected); found {
+			terminals = append(terminals, terminalID)
+		}
+	}
+	return terminals
+}
+
+func restartedManagedTerminal(
+	ref backend.PaneRef,
+	terminalID, cwd string,
+	expected state.RuntimeResource,
+) (string, bool) {
+	if strings.TrimSpace(terminalID) == "" || terminalID == expected.TerminalID {
+		return "", false
+	}
+	restarted := expected
+	restarted.TerminalID = terminalID
+	if !paneHasManagedResource(backend.WorkspacePaneObservation{
+		Pane: ref, TerminalID: terminalID, CWD: cwd,
+	}, restarted) {
+		return "", false
+	}
+	return terminalID, true
+}
+
+// restartedManagedCoordinatorResource follows an already-healed coordinator
+// only when the child intent's saved snapshot differs by terminal identity.
+func restartedManagedCoordinatorResource(
+	current state.RuntimeResource,
+	expected state.RuntimeResource,
+) (state.RuntimeResource, bool) {
+	terminalID := current.TerminalID
+	current.TerminalID = expected.TerminalID
+	if !managedCoordinatorResourceComplete(expected) || strings.TrimSpace(terminalID) == "" ||
+		terminalID == expected.TerminalID || current != expected {
+		return state.RuntimeResource{}, false
+	}
+	expected.TerminalID = terminalID
+	return expected, true
+}
+
 // paneHasManagedResource reports whether one observed pane still carries the
 // pane identity the journal recorded for the workspace.
 func paneHasManagedResource(
@@ -126,15 +219,15 @@ func paneHasManagedResource(
 		pane.Pane.Workspace == expected.WorkspaceID &&
 		pane.Pane.Pane == expected.PaneID &&
 		pane.TerminalID == expected.TerminalID &&
-		pane.CWD == expected.CurrentPath
+		state.CleanRuntimeResourcePath(pane.CWD) == state.CleanRuntimeResourcePath(expected.CurrentPath)
 }
 
 func workspaceProvenanceMatches(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
 ) bool {
-	return (expected.RepoKey == "" || observation.RepoKey == expected.RepoKey) &&
-		(expected.RepoRoot == "" || observation.RepoRoot == expected.RepoRoot)
+	return (expected.RepoKey == "" || state.CleanRuntimeResourcePath(observation.RepoKey) == state.CleanRuntimeResourcePath(expected.RepoKey)) &&
+		(expected.RepoRoot == "" || state.CleanRuntimeResourcePath(observation.RepoRoot) == state.CleanRuntimeResourcePath(expected.RepoRoot))
 }
 
 // managedCoordinatorLabelKind names the coordinator lane in workspace labels;

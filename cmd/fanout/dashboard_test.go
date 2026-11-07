@@ -1,17 +1,70 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/backendtest"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
+	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/ui/dashboard"
 )
+
+func TestDashboardListOutsideRepository(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	var out, errOut bytes.Buffer
+	lg := log.NewWith(&out, &errOut, false)
+	if code := cmdDashboard([]string{"--list"}, lg); code != 0 || out.String() != "PID\tURL\tPROJECT ROOT\n" {
+		t.Fatalf("empty list code=%d output=%q error=%q", code, out.String(), errOut.String())
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer srv.Close()
+	root := filepath.Join(t.TempDir(), "repo with spaces")
+	cleanup, err := dashboard.RegisterDashboard(root, dashboard.RunFile{URL: srv.URL + "/?token=test-secret", Token: "test-secret", PID: os.Getpid(), StartedAt: "2026-10-17T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	out.Reset()
+	if code := cmdDashboard([]string{"--list"}, lg); code != 0 {
+		t.Fatalf("list failed: code=%d error=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), srv.URL+"/") || !strings.Contains(out.String(), root) || strings.Contains(out.String(), "test-secret") {
+		t.Fatal("listing omitted the locator or exposed its token")
+	}
+	for _, args := range [][]string{{"--list", "--open"}, {"--web", "--list"}, {"--list", "--port", "0"}, {"--list", "--no-keybind"}} {
+		if code := cmdDashboard(args, lg); code != 2 {
+			t.Errorf("server options accepted with list: %v => %d", args, code)
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	if code := cmdDashboard([]string{"--list"}, lg); code != 1 {
+		t.Fatalf("registry error code=%d, want 1", code)
+	}
+}
+
+type dashboardShortcutBinderFake struct {
+	backend.Backend
+	options []backend.DashboardShortcutOptions
+}
+
+func (f *dashboardShortcutBinderFake) SyncDashboardShortcut(options backend.DashboardShortcutOptions) error {
+	f.options = append(f.options, options)
+	return nil
+}
 
 func TestIsDashboardRequest(t *testing.T) {
 	tests := []struct {
@@ -100,30 +153,98 @@ func TestParsePort(t *testing.T) {
 	}
 }
 
-func TestNoKeybindOverride(t *testing.T) {
-	if noKeybindOverride(false) != nil {
-		t.Fatal("no --no-keybind -> nil (defer to lower layers)")
-	}
-	if v := noKeybindOverride(true); v == nil || *v != false {
-		t.Fatalf("--no-keybind -> *false, got %v", v)
-	}
-}
-
 func TestBindDashboardKeyForBackendNeedsShortcutCapability(t *testing.T) {
 	argsPath := installTUIDashboardTmuxShim(t)
-	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Herdr})
+	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Herdr}, "/repo")
 	if body, err := os.ReadFile(argsPath); err == nil {
 		t.Fatalf("herdr dashboard bound tmux keys:\n%s", body)
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("read tmux argv log: %v", err)
 	}
 
-	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Tmux})
+	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Tmux}, "/repo")
 	log := readTUITmuxLog(t, argsPath)
 	for _, want := range []string{"bind-key\nD\nrun-shell", "bind-key\n-n\nF12\nrun-shell", "bind-key\nM\ndisplay-popup"} {
 		if !tmuxLogHasCommand(log, want) {
 			t.Fatalf("tmux dashboard log missing %q:\n%s", want, log)
 		}
+	}
+}
+
+func TestBindRuntimeDashboardKeyUsesDashboardOnlyCapability(t *testing.T) {
+	fake := &dashboardShortcutBinderFake{Backend: backendtest.New()}
+	bindRuntimeDashboardKey(discardLogger(), false, "/repo", fake)
+	if len(fake.options) != 1 || fake.options[0].Enabled || fake.options[0].FanoutBin == "" {
+		t.Fatalf("dashboard shortcut options = %+v", fake.options)
+	}
+	if len(fake.options[0].Owners) != 0 {
+		t.Fatalf("disabled dashboard shortcut owners = %+v", fake.options[0].Owners)
+	}
+	if fake.options[0].ResolveOwners != nil {
+		t.Fatal("disabled dashboard shortcut retained an owner resolver")
+	}
+	if len(fake.options[0].Environment) == 0 {
+		t.Fatal("dashboard shortcut did not receive the host environment")
+	}
+}
+
+func TestRuntimeDashboardKeyBinderReadsPreparedBackend(t *testing.T) {
+	preview := &dashboardShortcutBinderFake{Backend: backendtest.New()}
+	owned := &dashboardShortcutBinderFake{Backend: backendtest.New()}
+	wantOwner := backend.DashboardShortcutOwner{
+		PaneID: "pane-a", WorkspaceID: "workspace-a", SessionID: "session-a",
+		SocketPath: "/socket-a", StatePath: state.Path("/repo"),
+	}
+	originalResolver := resolveDashboardShortcutOwners
+	t.Cleanup(func() { resolveDashboardShortcutOwners = originalResolver })
+	resolverCalls := 0
+	resolveDashboardShortcutOwners = func(root string) ([]backend.DashboardShortcutOwner, error) {
+		resolverCalls++
+		if root != "/repo" {
+			t.Fatalf("dashboard shortcut owner root = %q", root)
+		}
+		return []backend.DashboardShortcutOwner{wantOwner}, nil
+	}
+	rt := &run.Runtime{Backend: preview, Info: &fanoutruntime.Info{ProjectRoot: "/repo"}}
+	bind := runtimeDashboardKeyBinder(rt)
+	rt.PrepareBackend = func() error {
+		rt.Backend = owned
+		return nil
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		t.Fatal(err)
+	}
+
+	bind(discardLogger(), true)
+
+	if len(preview.options) != 0 || len(owned.options) != 1 || !owned.options[0].Enabled ||
+		owned.options[0].ResolveOwners == nil || len(owned.options[0].Owners) != 0 || resolverCalls != 0 {
+		t.Fatalf("dashboard shortcut sync = preview:%+v owned:%+v", preview.options, owned.options)
+	}
+	owners, err := owned.options[0].ResolveOwners()
+	if err != nil || resolverCalls != 1 || len(owners) != 1 || owners[0] != wantOwner {
+		t.Fatalf("deferred dashboard owners = %+v calls=%d err=%v", owners, resolverCalls, err)
+	}
+}
+
+func TestDashboardShortcutOwnersKeepLinkedStateOwners(t *testing.T) {
+	stores := []paneruntime.ProjectStore{
+		{Root: "/repo-a", Store: state.Store{Panes: []state.Pane{{
+			PaneID: "pane-a", WorkspaceID: "workspace-a", SessionID: "session",
+			SocketPath: "/socket",
+		}}}},
+		{Root: "/repo-b", Store: state.Store{Panes: []state.Pane{{
+			PaneID: "pane-b", WorkspaceID: "workspace-b", SessionID: "session",
+			SocketPath: "/socket",
+		}}}},
+	}
+	var owners []backend.DashboardShortcutOwner
+	for _, store := range stores {
+		owners = append(owners, dashboardShortcutOwners(store)...)
+	}
+	if len(owners) != 2 || owners[0].StatePath != state.Path("/repo-a") ||
+		owners[1].StatePath != state.Path("/repo-b") {
+		t.Fatalf("linked dashboard shortcut owners = %+v", owners)
 	}
 }
 

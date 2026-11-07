@@ -92,9 +92,9 @@ herdr が上位互換な 3 点を、tmux の上のレイヤーという形のま
 `@fanout_agent_state` を running / working / idle / blocked / done の 5 値 + 空に拡張する。キーも書き込み先(tmux pane user option)も変えない。(2026-07 追記: 受理・表示側は session-notifications プランで実装済み。実装された契約は 5 値に Codex Plan Mode の plan を加えた 6 値 running / working / plan / blocked / idle / done。)running(起動済みだが粒度不明)と done(プロセス終了)は現行の起動ラッパーがそのまま書くので、hooks 非対応エージェントや旧版 fanout が起動したペインは自然に 2 値に留まり、後方互換は値のセマンティクスだけで成立する。
 
 - Claude Code: 起動コマンドに `--settings`(インライン JSON)で hooks を注入する。`UserPromptSubmit` / `PreToolUse` / `PostToolUse` → working、`Notification` → blocked、`Stop` → idle。`PreToolUse` は許可判定の前に発火するため、許可待ち(blocked)からの復帰はそれでは拾えず、次の `PostToolUse` か `Stop` で解除する。hook 実体は `tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state <state> 2>/dev/null || true` の 1 行シェルで、fanout バイナリを経由しない
-- Codex: hooks が既定有効で(`~/.codex/hooks.json` / `config.toml`、https://developers.openai.com/codex/hooks)、`PermissionRequest` → blocked に置き換えるほかは Claude と同じマッピングを組める。起動時注入の経路(`-c` での hooks 定義可否)と非管理 hooks の信頼確認ダイアログの挙動は spike で検証する
+- Codex: 0.164.0 の空 config で `hooks` の既定値 `true` を確認した。`PermissionRequest` は公開仕様にあるが、実行時 stdin と trust ダイアログは今回未採取。外部行の v1 では hook 由来の状態を使わない。採取条件と非使用項目は [外部エージェント検出の決定記録](external-agents.ja.md) を参照
 - hook 信号は lifecycle 全体を覆う authority ではなく、表示・nudge・wait 向けの近似テレメトリと位置づける(herdr も Claude Code / Codex は session identity 統合で、状態検出には画面検出を併用している)。取りこぼしは `Stop` → idle と `--timeout` で回収し、状態値を正確性のクリティカルパスに置かない
-- herdr の「user 設定に hooks を書き込む」インストール方式(`integration install`)は採らない。起動時注入なら fanout が起動したペインにだけ効き、ユーザーの他セッションを汚さない
+- 2026-10-27、#865 の外部エージェント表示に合わせ、user 設定への `integration install` を opt-out 既定へ改訂した。`FANOUT_NO_AGENT_HOOKS=1` で導入を止め、`FANOUT_EXTERNAL_AGENTS=0` で外部行を止める設計とする。既存の起動時注入は維持する。installer は symlink の実体解決・初回 backup・JSON 検証・所有項目だけの撤去を行い、未検証の event / PID 結合を導入しない。Codex の trust は利用者の明示承認に委ねる。この spike 自体は実ユーザー設定を書き換えない
 
 波及先は `internal/app/sessionview` の `normalizeAgentState`(許可リスト拡張)、`internal/app/peermsg` の `shouldNudge`(idle と粒度不明の running だけ nudge し、working / blocked / done は no-op のまま。2026-07 追記: 実装では working / plan も nudge 許可に含めた — ターン中の入力は queue されて安全で、hooks 導入後はターンの大半が working になり running / idle だけでは nudge がほぼ届かないため。blocked / done / 未設定は no-op のまま)、TUI detail と web dashboard の状態表示。起動コマンドが変わるので Tier 2 dry-run golden は全件再生成になる。#106(レビュー追従 nudge)は blocked / busy を避けて idle の瞬間に届ける品質になり、#59(Wave 自動進行)の完了検知の土台にもなる。
 
@@ -126,7 +126,7 @@ A → B の順で入れ、C は並行。#59 / #106 は A / B の上に乗る(#10
 
 - **multiplexer 化**: dmux 脱却(#81 / #145)で tmux 直制御へ単純化した判断と矛盾する。tmux は共有インフラで、fanout はその上のレイヤーに留まる
 - **Socket API / デーモン化**: fanout のエージェント向けインターフェースは CLI(`msg` / `--status` / 将来の `wait`)+ state.json で足りる。常駐サーバーは dashboard の境界(localhost 限定・読み取り既定・mutation は PR merge の 1 本のみ)を崩す誘因になる
-- **capture-pane ヒューリスティクスによる状態推定**: ペイン内容は攻撃可能面(peek の検証チェーンが前提とする設計判断)であり、TUI 再描画で壊れやすい。状態は hooks / notify の明示信号だけから取る。B の `wait --output` はペイン出力を使うが、明示指定パターンの待機であって状態推定ではない — B に書いたとおり調整用途に限る
+- **capture-pane ヒューリスティクスによる状態推定**: ペイン内容は攻撃可能面(peek の検証チェーンが前提とする設計判断)であり、TUI 再描画で壊れやすい。外部行は検証済み hooks / Session metadata とプロセスの生存から状態を取る。プロセス identity と Session metadata は pane 内容ではない。未検証の情報源は [外部エージェント検出の決定記録](external-agents.ja.md) に従って v1 では使わない。B の `wait --output` はペイン出力を使うが、明示指定パターンの待機であって状態推定ではない — B に書いたとおり調整用途に限る
 - **SSH リモートアタッチ・マウス対応 TUI**: tmux 自体の機能(attach / mouse mode)で代替できる。fanout が再実装する層ではない
 - **sidebar layout の再実装**: wave 2 は tmux-parity の協調プロセス信頼で exact target を直前・直後に再照合し、pane / workspace の表示専用 token 値を報告できる。
   authoritative server generation と target `terminal_id` / workspace generation を request に原子的に束縛できる場合は proof-grade tier へ格上げする。

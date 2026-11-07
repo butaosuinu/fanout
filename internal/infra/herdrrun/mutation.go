@@ -67,16 +67,9 @@ func (s *OwnedSession) VerifyWorktreeSetupPolicy(ctx context.Context) error {
 	if s == nil || s.backend == nil {
 		return fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return err
-	}
-	return s.backend.verifyEmptyPluginRegistry(ctx, probed)
+	return s.backend.withOwned(ctx, ownedOperationLane, ownedErrors{}, func(call ownedCall) error {
+		return s.backend.verifyEmptyPluginRegistry(ctx, call.probed)
+	})
 }
 
 func (b *Backend) verifyEmptyPluginRegistry(ctx context.Context, probed probeResult) error {
@@ -108,16 +101,16 @@ func (s *OwnedSession) ObserveWorkspaces(ctx context.Context) ([]corebackend.Wor
 	if s == nil || s.backend == nil {
 		return nil, fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	var workspaces []corebackend.WorkspaceObservation
+	err := s.backend.withOwned(ctx, ownedOperationLane, ownedErrors{}, func(call ownedCall) error {
+		var err error
+		workspaces, err = s.backend.observeOwnedWorkspaces(ctx, call.probed)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return nil, err
-	}
-	return s.backend.observeOwnedWorkspaces(ctx, probed)
+	return workspaces, nil
 }
 
 // WorktreeRoute returns the repository and route sealed by the current owned
@@ -126,16 +119,19 @@ func (s *OwnedSession) WorktreeRoute(ctx context.Context) (corebackend.OwnedWork
 	if s == nil || s.backend == nil {
 		return corebackend.OwnedWorktreeRoute{}, fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	var route corebackend.OwnedWorktreeRoute
+	err := s.backend.withOwnedAdmission(ctx, ownedOperationLane, nil, func(call ownedCall) error {
+		route = corebackend.OwnedWorktreeRoute{
+			GitCommonDir: call.admission.marker.GitCommonDir,
+			Session:      call.admission.marker.Session,
+			SocketPath:   call.admission.marker.SocketPath,
+		}
+		return nil
+	})
 	if err != nil {
 		return corebackend.OwnedWorktreeRoute{}, err
 	}
-	defer unlockPrivateFile(lock)
-	return corebackend.OwnedWorktreeRoute{
-		GitCommonDir: admission.marker.GitCommonDir,
-		Session:      admission.marker.Session,
-		SocketPath:   admission.marker.SocketPath,
-	}, nil
+	return route, nil
 }
 
 // CreateWorkspace issues one coordinator workspace create.
@@ -263,21 +259,36 @@ func (s *OwnedSession) issueMutation(
 			fmt.Errorf("herdr owned session is nil"),
 		)
 	}
-	admission, lock, admissionErr := s.backend.acquireOwnedMutation(ctx)
-	if admissionErr != nil {
-		return corebackend.WorktreeMutationResult{}, mutationNotIssued(admissionErr)
+	var result corebackend.WorktreeMutationResult
+	err := s.backend.withOwnedAdmission(ctx, ownedMutationLane, mutationNotIssued, func(call ownedCall) error {
+		if call.admission.marker.GitCommonDir != spec.sourceRepoKey {
+			return mutationNotIssued(
+				fmt.Errorf("herdr mutation source repository does not match owned session"),
+			)
+		}
+		probed, probeErr := call.probe(ctx)
+		if probeErr != nil {
+			return mutationNotIssued(probeErr)
+		}
+		var issueErr error
+		result, issueErr = s.issueProbedMutation(ctx, probed, spec, args, envelopeID, resultType)
+		return issueErr
+	})
+	if err != nil {
+		return corebackend.WorktreeMutationResult{}, err
 	}
-	defer unlockPrivateFile(lock)
-	if admission.marker.GitCommonDir != spec.sourceRepoKey {
-		return corebackend.WorktreeMutationResult{}, mutationNotIssued(
-			fmt.Errorf("herdr mutation source repository does not match owned session"),
-		)
-	}
-	probed, probeErr := s.backend.probeOwned(ctx, admission)
-	if probeErr != nil {
-		return corebackend.WorktreeMutationResult{}, mutationNotIssued(probeErr)
-	}
+	return result, nil
+}
 
+// issueProbedMutation runs the mutation on an already admitted and probed
+// route and proves its result against one post-mutation snapshot.
+func (s *OwnedSession) issueProbedMutation(
+	ctx context.Context,
+	probed probeResult,
+	spec mutationSpec,
+	args []string,
+	envelopeID, resultType string,
+) (corebackend.WorktreeMutationResult, error) {
 	out, commandErr := s.backend.runWorktreeMutation(ctx, probed.binary, probed.route, args...)
 	if commandErr != nil {
 		if rejected, ok := decodeMutationRejection(out, commandErr, envelopeID); ok {
@@ -285,39 +296,64 @@ func (s *OwnedSession) issueMutation(
 		}
 		return corebackend.WorktreeMutationResult{}, commandErr
 	}
-	response, decodeErr := decodeWorktreeMutationResponse(out, envelopeID, resultType)
-	if decodeErr != nil {
-		return corebackend.WorktreeMutationResult{}, decodeErr
-	}
-	if responseErr := validateMutationResponse(spec, response.Workspace); responseErr != nil {
+	response, alreadyOpen, responseErr := acceptMutationResponse(spec, out, envelopeID, resultType)
+	if responseErr != nil {
 		return corebackend.WorktreeMutationResult{}, responseErr
-	}
-	if *response.Workspace.Focused {
-		return corebackend.WorktreeMutationResult{}, fmt.Errorf("herdr mutation focused a no-focus workspace")
-	}
-	alreadyOpen := response.AlreadyOpen != nil && *response.AlreadyOpen
-	if err := validateAlreadyOpen(spec, response.Workspace, alreadyOpen); err != nil {
-		return corebackend.WorktreeMutationResult{}, err
 	}
 
 	workspaces, observeErr := s.backend.observeOwnedWorkspaces(ctx, probed)
 	if observeErr != nil {
 		return corebackend.WorktreeMutationResult{}, fmt.Errorf("observe Herdr mutation result: %w", observeErr)
 	}
+	match, err := singleLiveWorkspace(workspaces, response.Workspace.WorkspaceID)
+	if err != nil {
+		return corebackend.WorktreeMutationResult{}, err
+	}
+	return corebackend.WorktreeMutationResult{WorkspaceObservation: match, AlreadyOpen: alreadyOpen}, nil
+}
+
+// acceptMutationResponse decodes the mutation output and refuses a response
+// that does not match the spec, focused the workspace, or claims an unbound
+// already_open. The bool is the accepted already_open value.
+func acceptMutationResponse(
+	spec mutationSpec,
+	out []byte,
+	envelopeID, resultType string,
+) (worktreeMutationResult, bool, error) {
+	response, err := decodeWorktreeMutationResponse(out, envelopeID, resultType)
+	if err != nil {
+		return worktreeMutationResult{}, false, err
+	}
+	if err := validateMutationResponse(spec, response.Workspace); err != nil {
+		return worktreeMutationResult{}, false, err
+	}
+	if *response.Workspace.Focused {
+		return worktreeMutationResult{}, false, fmt.Errorf("herdr mutation focused a no-focus workspace")
+	}
+	alreadyOpen := response.AlreadyOpen != nil && *response.AlreadyOpen
+	if err := validateAlreadyOpen(spec, response.Workspace, alreadyOpen); err != nil {
+		return worktreeMutationResult{}, false, err
+	}
+	return response, alreadyOpen, nil
+}
+
+// singleLiveWorkspace returns the one observed workspace the mutation response
+// named, refusing when the snapshot holds none or several.
+func singleLiveWorkspace(workspaces []corebackend.WorkspaceObservation, workspaceID string) (corebackend.WorkspaceObservation, error) {
 	var matches []corebackend.WorkspaceObservation
 	for _, workspace := range workspaces {
-		if workspace.WorkspaceID == response.Workspace.WorkspaceID {
+		if workspace.WorkspaceID == workspaceID {
 			matches = append(matches, workspace)
 		}
 	}
 	if len(matches) != 1 {
-		return corebackend.WorktreeMutationResult{}, fmt.Errorf(
+		return corebackend.WorkspaceObservation{}, fmt.Errorf(
 			"herdr mutation response workspace %q has %d live matches",
-			response.Workspace.WorkspaceID,
+			workspaceID,
 			len(matches),
 		)
 	}
-	return corebackend.WorktreeMutationResult{WorkspaceObservation: matches[0], AlreadyOpen: alreadyOpen}, nil
+	return matches[0], nil
 }
 
 func mutationNotIssued(err error) error {
@@ -434,26 +470,27 @@ func validateMutationResponse(spec mutationSpec, workspace workspaceJSON) error 
 func (b *Backend) observeOwnedSnapshot(
 	ctx context.Context,
 	probed probeResult,
-) (snapshotJSON, error) {
-	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "api", "snapshot")
+) (snapshotJSON, []corebackend.LivePane, error) {
+	out, err := b.runReadContext(ctx, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		return snapshotJSON{}, methodUnavailable("session.snapshot")
+		return snapshotJSON{}, nil, readMethodError("session.snapshot", err)
 	}
 	var envelope snapshotEnvelope
-	if err := decodeOne(out, &envelope); err != nil {
-		return snapshotJSON{}, methodUnavailable("session.snapshot")
+	if decodeErr := decodeOne(out, &envelope); decodeErr != nil {
+		return snapshotJSON{}, nil, methodUnavailable("session.snapshot")
 	}
-	if _, err := projectSnapshot(envelope, probed); err != nil {
-		return snapshotJSON{}, methodUnavailable("session.snapshot")
+	live, err := projectSnapshot(envelope, probed)
+	if err != nil {
+		return snapshotJSON{}, nil, methodUnavailable("session.snapshot")
 	}
-	return envelope.Result.Snapshot, nil
+	return envelope.Result.Snapshot, live, nil
 }
 
 func (b *Backend) observeOwnedWorkspaces(
 	ctx context.Context,
 	probed probeResult,
 ) ([]corebackend.WorkspaceObservation, error) {
-	snapshot, err := b.observeOwnedSnapshot(ctx, probed)
+	snapshot, live, err := b.observeOwnedSnapshot(ctx, probed)
 	if err != nil {
 		return nil, err
 	}
@@ -461,9 +498,15 @@ func (b *Backend) observeOwnedWorkspaces(
 	for _, pane := range *snapshot.Panes {
 		panes[pane.WorkspaceID] = append(panes[pane.WorkspaceID], pane)
 	}
+	liveByWorkspace := make(map[string][]corebackend.LivePane, len(*snapshot.Workspaces))
+	for _, pane := range live {
+		liveByWorkspace[pane.Ref.Workspace] = append(liveByWorkspace[pane.Ref.Workspace], pane)
+	}
 	result := make([]corebackend.WorkspaceObservation, 0, len(*snapshot.Workspaces))
 	for _, workspace := range *snapshot.Workspaces {
-		result = append(result, workspaceObservation(workspace, panes[workspace.WorkspaceID]))
+		observation := workspaceObservation(workspace, panes[workspace.WorkspaceID])
+		observation.LivePanes = liveByWorkspace[workspace.WorkspaceID]
+		result = append(result, observation)
 	}
 	return result, nil
 }

@@ -193,6 +193,7 @@ func TestLaunchIssueSessionFromTUIReturnsStandalonePaneID(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	origin := t.TempDir()
 	gitCmdTest(t, origin, "init", "--bare")
 	gitCmdTest(t, repo, "remote", "add", "origin", origin)
@@ -229,7 +230,7 @@ esac
 	}
 	if len(result.CreatedBindings) != 1 || result.CreatedBindings[0].Ref.Pane != "%91" ||
 		result.CreatedBindings[0].Row.IssueNum != 501 {
-		t.Fatalf("created bindings = %+v, want standalone row", result.CreatedBindings)
+		t.Fatalf("created bindings = %+v, want standalone row #501", result.CreatedBindings)
 	}
 }
 
@@ -409,6 +410,10 @@ func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) 
 	}
 	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%91", "%92"}) {
 		t.Fatalf("created pane ids = %#v, want orchestrator then child", result.CreatedPaneIDs)
+	}
+	if len(result.CreatedBindings) != 2 || result.CreatedBindings[0].Ref.Pane != "%91" ||
+		result.CreatedBindings[1].Ref.Pane != "%92" {
+		t.Fatalf("created bindings = %+v, want orchestrator then child", result.CreatedBindings)
 	}
 	if result.Notice != "fanned out #500: started orchestrator + 1 child pane(s)" {
 		t.Fatalf("notice = %q, want orchestrator success", result.Notice)
@@ -722,6 +727,7 @@ func TestLaunchIssueSessionFromTUIAllowsNonCodexPlanChild(t *testing.T) {
 
 func prepareTUIParentLaunchRepo(t *testing.T) string {
 	t.Helper()
+	isolateBackendEnv(t)
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
@@ -808,6 +814,7 @@ func installTUISequentialTmuxShim(t *testing.T, repo string) string {
 set -euo pipefail
 printf '%s\n' "$@" >> "$TMUX_SHIM_ARGS"
 printf '%s\n' '---' >> "$TMUX_SHIM_ARGS"
+if [[ "${1:-}" == "-u" ]]; then shift; fi
 case "${1:-}" in
   split-window)
     read -r current < "$TMUX_SHIM_COUNTER"
@@ -926,6 +933,7 @@ esac
 func TestLaunchIssueSessionFromTUITranslatesAlreadyFanned(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	locked, err := state.LockProject(repo)
 	if err != nil {
 		t.Fatal(err)

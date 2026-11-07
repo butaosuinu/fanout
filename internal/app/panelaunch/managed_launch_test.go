@@ -18,6 +18,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -305,6 +306,7 @@ func TestFinalizeManagedLaunchAppliesPendingTelemetryFromLatestIntent(t *testing
 	intent.Launch = validTestManagedLaunch()
 	intent.Launch.EmitterNonce = strings.Repeat("b", 32)
 	intent.Launch.PendingReportedState = string(backend.AgentIdle)
+	intent.Launch.PendingReportedSeq = 4
 	pendingSession := backend.AgentSessionRef{
 		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-531",
 	}
@@ -350,7 +352,7 @@ func TestFinalizeManagedLaunchAppliesPendingTelemetryFromLatestIntent(t *testing
 	if !found {
 		t.Fatal("final pane row was not saved")
 	}
-	if pane.ReportedState != "idle" || !pane.StateRefinement ||
+	if pane.ReportedState != "idle" || pane.ReportedStateSeq != 4 || !pane.StateRefinement ||
 		pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce ||
 		pane.EmitterNonce != intent.Launch.EmitterNonce || pane.LaunchExecutable != intent.Launch.Executable ||
 		!slices.Equal(pane.LaunchArgs, intent.Launch.Args) {
@@ -402,6 +404,11 @@ func TestFinalizeManagedAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	if intent.Parent != ManualParentRef || intent.ID == shared.ID {
 		t.Fatalf("attached workspace reused shared coordinator: %+v", intent)
 	}
+	if intent.Kind != state.IntentCoordinator || intent.Launch == nil ||
+		intent.Launch.Agent != "claude" || intent.Launch.CodexPlanStatusPath != "" ||
+		intent.Launch.CodexTeamStatusPath != "" {
+		t.Fatalf("attached workspace workload = %+v, want direct claude coordinator launch", intent.Launch)
+	}
 	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -433,16 +440,72 @@ func TestFinalizeManagedAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	}
 }
 
+func TestManagedAttachedCrashResumeReusesIssueParentIntent(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	runtime := &fakeManagedLaunchRuntime{}
+	installSuccessfulManagedMutations(t, repo, &runtime.fakeManagedRealizeRuntime)
+	hooks := deterministicManagedRealizeHooks()
+	realizeTestManagedCoordinator(t, repo, &runtime.fakeManagedRealizeRuntime, hooks)
+	runtime.launchRoute = backend.OwnedLaunchRoute{
+		GitCommonDir: runtime.route.GitCommonDir,
+		Session:      runtime.route.Session, SocketPath: runtime.route.SocketPath,
+		LauncherPath: "/owned/fanout", RuntimeDir: t.TempDir(),
+	}
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	launcher := &Launcher{
+		Cfg: &cliflags.Config{}, Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime,
+	}
+	req := Request{
+		ParentRef: "425", Number: -1, Slug: "attached-issue-425", Agent: "claude", Prompt: "review",
+	}
+	intent, err := launcher.prepareManagedAttachedIntent(
+		context.Background(), req, repo, locked, runtime.launchRoute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.RuntimeParent != ManualParentRef {
+		t.Fatalf("persisted attached runtime parent = %q, want %q", intent.RuntimeParent, ManualParentRef)
+	}
+	retryNumber := nextAttachedSyntheticPaneNumber(repo, locked.Store, req.ParentRef, repo)
+	mutations := len(runtime.mutations)
+	req.Number = retryNumber
+	resumed, err := launcher.prepareManagedAttachedIntent(
+		context.Background(), req, repo, locked, runtime.launchRoute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryNumber != -1 || resumed.ID != intent.ID || len(runtime.mutations) != mutations {
+		t.Fatalf(
+			"attached retry = number %d intent %q mutations %d, want -1/%q/%d",
+			retryNumber, resumed.ID, len(runtime.mutations), intent.ID, mutations,
+		)
+	}
+}
+
 func TestManagedAttachedStatePanePreservesCodexControllerIdentity(t *testing.T) {
 	status := codexapp.Status{ThreadID: "thread-554", SessionID: "session-554"}
 	pane := managedAttachedStatePane(
 		Request{ParentRef: ManualParentRef, Number: -1, Agent: "codex", LaunchMode: agent.ModePlan},
-		state.LaunchIntent{WorktreePath: "/repo"},
+		state.LaunchIntent{WorktreePath: "/repo", RuntimeParent: ManualParentRef},
 		backend.LivePane{Ref: backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"}},
 		status,
 	)
 	if pane.CodexThreadID != status.ThreadID || pane.CodexSessionID != status.SessionID {
 		t.Fatalf("attached Codex identity = %q/%q, want %q/%q", pane.CodexThreadID, pane.CodexSessionID, status.ThreadID, status.SessionID)
+	}
+	if pane.RuntimeParent != ManualParentRef || pane.RepoKey != "" || pane.RepoRoot != "" {
+		t.Fatalf("attached launch ownership = %+v", pane)
 	}
 }
 
@@ -460,6 +523,7 @@ func TestWaitForManagedAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 			name: "pending telemetry",
 			mutate: func(journal *state.LockedLaunchJournal, intent state.LaunchIntent) error {
 				intent.Launch.PendingReportedState = string(backend.AgentWorking)
+				intent.Launch.PendingReportedSeq = 1
 				journal.UpsertIntent(intent)
 				return journal.Save()
 			},
@@ -1338,6 +1402,62 @@ func TestRecordManagedCoordinatorIgnoresEarlierManualRows(t *testing.T) {
 	}
 }
 
+func TestRecordManagedCoordinatorPreservesPendingPlanRetirement(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			repo := newManagedRealizeRepo(t)
+			intent := burnedManualCoordinatorIntent(t, repo, repo, -2, state.IntentRealized)
+			intent.Parent, intent.RuntimeParent, intent.IssueNum = "plan:demo", "plan:demo", 0
+			var err error
+			intent.ID, err = state.CoordinatorIntentID(intent.Parent, repo, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending {
+				intent.Status, intent.Failure = state.IntentManualCleanupRequired, ManagedCoordinatorClosePending
+			}
+			route := backend.OwnedLaunchRoute{Session: intent.Session, SocketPath: intent.SocketPath}
+			pane := managedCoordinatorPane(intent, route, intent.RuntimeParent, -2)
+			locked, err := state.LockProjectForLaunch(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if unlockErr := locked.Unlock(); unlockErr != nil {
+					t.Error(unlockErr)
+				}
+			}()
+			if recordErr := locked.RecordPane(pane); recordErr != nil {
+				t.Fatal(recordErr)
+			}
+			journal, err := locked.LaunchJournal(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal.UpsertIntent(intent)
+			if saveErr := journal.Save(); saveErr != nil {
+				t.Fatal(saveErr)
+			}
+			other := burnedManualCoordinatorIntent(t, repo, repo, -3, state.IntentRealized)
+			other.Parent, other.RuntimeParent, other.IssueNum = "plan:other", "plan:other", 0
+			live := []backend.LivePane{{
+				Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: other.Resource.WorkspaceID, Pane: other.Resource.PaneID},
+				WorkspaceLabel: other.Resource.Label, TerminalID: other.Resource.TerminalID,
+			}}
+			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
+			if recordErr := launcher.recordManagedCoordinator(locked, other, route, live); recordErr != nil {
+				t.Fatal(recordErr)
+			}
+			if _, found := locked.Find(pane.Parent, pane.IssueNum); found != pending {
+				t.Fatalf("coordinator row retained=%t, want %t", found, pending)
+			}
+			if saved, found := journal.FindIntent(intent.ID); !found || saved.Status != intent.Status || saved.Failure != intent.Failure {
+				t.Fatalf("retirement intent changed: %+v, found=%t", saved, found)
+			}
+		})
+	}
+}
+
 // TestFindManagedCoordinatorPaneMatchesOnlyCoordinatorRole guarantees the row
 // search cannot mistake agent, attached-agent, or terminal rows — or another
 // coordinator's row — for this intent's coordinator row.
@@ -1435,6 +1555,365 @@ func TestNextManagedSyntheticPaneNumberSkipsBurnedManualNumbers(t *testing.T) {
 	// intent, which is the crash-recovery path and must stay eligible.
 	if got := NextManagedSyntheticPaneNumber(repo, store, ManualParentRef); got != -3 {
 		t.Fatalf("NextManagedSyntheticPaneNumber(burned -2, realized -3) = %d, want -3", got)
+	}
+}
+
+func TestReclaimManagedSyntheticPaneNumberReusesProvenAbsentNumber(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	journal, err := locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, -2, state.IntentManualCleanupRequired)
+	intent.Resource = managedManualTestResource(intent.WorkspaceLabel, repo, 2)
+	runtimeDir := t.TempDir()
+	intent.Launch = validTestManagedLaunch()
+	intent.Launch.EnvFilePath = filepath.Join(runtimeDir, "workload-env", "env-"+intent.Launch.Nonce+".json")
+	if err = os.MkdirAll(filepath.Dir(intent.Launch.EnvFilePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(intent.Launch.EnvFilePath, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}
+
+	runtime := &fakeManagedLaunchRuntime{launchRoute: backend.OwnedLaunchRoute{RuntimeDir: runtimeDir}}
+	ReclaimManagedSyntheticPaneNumber(context.Background(), repo, locked, ManualParentRef, runtime)
+
+	if got := NextManagedSyntheticPaneNumber(repo, locked.Store, ManualParentRef); got != -2 {
+		t.Fatalf("NextManagedSyntheticPaneNumber(reclaimed -2) = %d, want -2", got)
+	}
+	persisted, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := persisted.FindIntent(intent.ID); found {
+		t.Fatalf("reclaimed intent %s remains", intent.ID)
+	}
+	if _, err := os.Stat(intent.Launch.EnvFilePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reclaimed environment stat error = %v, want not exist", err)
+	}
+}
+
+func TestReclaimManagedSyntheticPaneNumberRetainsBurnOnSnapshotFailure(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	journal, err := locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, -2, state.IntentManualCleanupRequired)
+	intent.Resource = managedManualTestResource(intent.WorkspaceLabel, repo, 2)
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}
+
+	runtime := &fakeManagedLaunchRuntime{}
+	runtime.observeErr = errors.New("snapshot unavailable")
+	ReclaimManagedSyntheticPaneNumber(context.Background(), repo, locked, ManualParentRef, runtime)
+
+	if got := NextManagedSyntheticPaneNumber(repo, locked.Store, ManualParentRef); got != -3 {
+		t.Fatalf("NextManagedSyntheticPaneNumber(snapshot failure) = %d, want -3", got)
+	}
+	persisted, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := persisted.FindIntent(intent.ID); !found {
+		t.Fatalf("snapshot failure released intent %s", intent.ID)
+	}
+}
+
+func TestReclaimManagedSyntheticPaneNumberRetainsBurnOnEnvironmentDiscardFailure(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	journal, err := locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, -2, state.IntentManualCleanupRequired)
+	intent.Resource = managedManualTestResource(intent.WorkspaceLabel, repo, 2)
+	intent.Launch = validTestManagedLaunch()
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}
+	runtime := &fakeManagedLaunchRuntime{launchRoute: backend.OwnedLaunchRoute{RuntimeDir: t.TempDir()}}
+
+	ReclaimManagedSyntheticPaneNumber(context.Background(), repo, locked, ManualParentRef, runtime)
+
+	if got := NextManagedSyntheticPaneNumber(repo, locked.Store, ManualParentRef); got != -3 {
+		t.Fatalf("NextManagedSyntheticPaneNumber(discard failure) = %d, want -3", got)
+	}
+	assertManagedLaunchIntentFound(t, repo, intent.ID)
+}
+
+func TestReclaimManagedSyntheticPaneNumberUsesAttachmentParentAllocation(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	journal, err := locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, -1, state.IntentManualCleanupRequired)
+	intent.Resource = managedManualTestResource(intent.WorkspaceLabel, repo, 1)
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}
+	runtime := &fakeManagedLaunchRuntime{}
+
+	ReclaimManagedSyntheticPaneNumber(context.Background(), repo, locked, "423", runtime)
+
+	if got := NextManagedSyntheticPaneNumber(repo, locked.Store, "423"); got != -1 {
+		t.Fatalf("NextManagedSyntheticPaneNumber(issue attachment) = %d, want -1", got)
+	}
+	journal, err = locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := journal.FindIntent(intent.ID); found {
+		t.Fatalf("reclaimed attachment intent %s remains", intent.ID)
+	}
+}
+
+func assertManagedLaunchIntentFound(t *testing.T, repo, intentID string) {
+	t.Helper()
+	journal, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := journal.FindIntent(intentID); !found {
+		t.Fatalf("intent %s was released", intentID)
+	}
+}
+
+func managedManualTestResource(label, repo string, number int) state.RuntimeResource {
+	return state.RuntimeResource{
+		WorkspaceID: fmt.Sprintf("w%d", number), Label: label,
+		PaneID: fmt.Sprintf("w%d:p1", number), TerminalID: fmt.Sprintf("term-w%d", number),
+		CurrentPath: repo,
+	}
+}
+
+func TestNextAttachedSyntheticPaneNumberSeparatesIdentity(t *testing.T) {
+	t.Run("manual state row", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		store := state.Store{Panes: []state.Pane{{
+			Parent: ManualParentRef, IssueNum: -1, Backend: backend.Herdr,
+		}}}
+		if got := nextAttachedSyntheticPaneNumber(repo, store, "425", repo); got != -2 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(manual -1) = %d, want -2", got)
+		}
+	})
+
+	t.Run("tmux manual state row", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		store := state.Store{Panes: []state.Pane{{
+			Parent: ManualParentRef, IssueNum: -1, Backend: backend.Tmux,
+		}}}
+		if got := nextAttachedSyntheticPaneNumber(repo, store, "425", repo); got != -1 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(tmux -1) = %d, want -1", got)
+		}
+	})
+
+	t.Run("foreign realized intent", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		intent := allocationTestManualIntent(t, repo, -1, ManualParentRef, repo)
+		saveAllocationTestIntent(t, repo, intent)
+		target := filepath.Join(repo, "attached-target")
+		if got := nextAttachedSyntheticPaneNumber(repo, state.Store{}, "425", target); got != -2 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(foreign -1) = %d, want -2", got)
+		}
+	})
+
+	t.Run("matching crash resume", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		target := repo
+		intent := allocationTestManualIntent(t, repo, -1, ManualParentRef, target)
+		saveAllocationTestIntent(t, repo, intent)
+		if got := nextAttachedSyntheticPaneNumber(repo, state.Store{}, "425", target); got != -1 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(own -1) = %d, want -1", got)
+		}
+	})
+
+	t.Run("symlink crash resume", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		alias := filepath.Join(t.TempDir(), "repo-alias")
+		if err := os.Symlink(repo, alias); err != nil {
+			t.Fatal(err)
+		}
+		intent := allocationTestManualIntent(t, repo, -1, ManualParentRef, repo)
+		saveAllocationTestIntent(t, repo, intent)
+		if got := nextAttachedSyntheticPaneNumber(repo, state.Store{}, ManualParentRef, alias); got != -1 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(alias own -1) = %d, want -1", got)
+		}
+	})
+}
+
+func TestNewAttachedRequestSkipsMismatchedRecoverableBinding(t *testing.T) {
+	tests := []struct {
+		name          string
+		prompt        string
+		originalAgent string
+		retryAgent    string
+		originalPlan  bool
+		retryPlan     bool
+		retryParent   string
+		mutateIntent  func(*state.LaunchIntent)
+		want          int
+	}{
+		{name: "matching binding", prompt: "review", originalAgent: "claude", retryAgent: "claude", want: -1},
+		{name: "agent", prompt: "review", originalAgent: "claude", retryAgent: "codex", want: -2},
+		{
+			name: "issued agent mismatch", prompt: "review", originalAgent: "claude", retryAgent: "codex",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.Launch.TokenIssued = true }, want: -1,
+		},
+		{
+			name: "source parent", prompt: "review\nrepository identity",
+			originalAgent: "claude", retryAgent: "claude", retryParent: "526", want: -2,
+		},
+		{
+			name: "Codex Plan mode", prompt: "review", originalAgent: "codex", retryAgent: "codex",
+			retryPlan: true, want: -2,
+		},
+		{
+			name: "runtime parent", prompt: "review", originalAgent: "claude", retryAgent: "claude",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.RuntimeParent = "526" }, want: -2,
+		},
+		{
+			name: "team mode", prompt: "review", originalAgent: "codex", retryAgent: "codex",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.Launch.TeamDBPath = "/tmp/team.db" }, want: -2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newManagedRealizeRepo(t)
+			installFakeExecutable(t, "claude")
+			installFakeExecutable(t, "codex")
+			originalTarget := AttachTarget{SourceParent: "425", SourceIssueNum: 647, SourceLabel: "row identity"}
+			originalCfg := &cliflags.Config{Agent: tt.originalAgent, PlanMode: &tt.originalPlan}
+			original := NewAttachedRequest(
+				originalCfg, repo, state.Store{}, hooks.EmptyConfig(), tt.prompt, repo, originalTarget,
+			)
+			intent := allocationTestManualIntent(t, repo, original.Number, ManualParentRef, repo)
+			intent.Launch = allocationTestLaunchCapsule(t, original)
+			if tt.mutateIntent != nil {
+				tt.mutateIntent(&intent)
+			}
+			saveAllocationTestIntent(t, repo, intent)
+
+			retryTarget := originalTarget
+			if tt.retryParent != "" {
+				retryTarget.SourceParent = tt.retryParent
+			}
+			retryCfg := &cliflags.Config{Agent: tt.retryAgent, PlanMode: &tt.retryPlan}
+			retry := NewAttachedRequest(
+				retryCfg, repo, state.Store{}, hooks.EmptyConfig(), tt.prompt, repo, retryTarget,
+			)
+			if retry.Number != tt.want {
+				t.Fatalf("retry synthetic number = %d, want %d", retry.Number, tt.want)
+			}
+		})
+	}
+}
+
+func allocationTestLaunchCapsule(t *testing.T, req Request) *state.LaunchCapsule {
+	t.Helper()
+	spec, err := buildManagedLaunchSpec(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := validTestManagedLaunch()
+	launch.TokenIssued = false
+	launch.Agent = req.Agent
+	launch.Executable = spec.Executable
+	launch.Args = slices.Clone(spec.Args)
+	launch.TeamDBPath = req.TeamDBPath
+	launch.CodexTeamStatusPath = req.CodexTeamStatusPath
+	launch.CodexPlanStatusPath = req.CodexPlanStatusPath
+	if req.Agent == "claude" {
+		launch.Args = slices.Concat([]string{"--settings", `{}`}, launch.Args)
+	}
+	return launch
+}
+
+func allocationTestManualIntent(
+	t *testing.T,
+	repo string,
+	number int,
+	runtimeParent, worktreePath string,
+) state.LaunchIntent {
+	t.Helper()
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, number, state.IntentRealized)
+	worktreePath = canonicalAttachedAllocationPath(worktreePath)
+	intent.RuntimeParent = runtimeParent
+	intent.WorktreePath = worktreePath
+	intent.Resource.CurrentPath = worktreePath
+	return intent
+}
+
+func saveAllocationTestIntent(t *testing.T, repo string, intent state.LaunchIntent) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.LaunchJournal(repo)
+	if err == nil {
+		journal.UpsertIntent(intent)
+		err = journal.Save()
+	}
+	if unlockErr := locked.Unlock(); err == nil {
+		err = unlockErr
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -2194,6 +2673,136 @@ func TestRecordManagedCoordinatorHealsDriftedRow(t *testing.T) {
 	if len(locked.Panes) != 1 || locked.Panes[0].IssueNum != -3 ||
 		locked.Panes[0].WorkspaceID != "w9" || locked.Panes[0].TerminalID != "term-w9" {
 		t.Fatalf("healed rows = %+v, want the same number carrying the live identity", locked.Panes)
+	}
+}
+
+func TestReconcileManagedCoordinatorReplanRowHealsCurrentLabelDrift(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	previous := state.RuntimeResource{
+		WorkspaceID: "w2", Label: "fanout-coordinator-replan-token",
+		PaneID: "w2:p1", TerminalID: "term-w2", CurrentPath: repo,
+	}
+	current := state.LaunchIntent{
+		ID: "coordinator-replan", Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: ManualParentRef, RuntimeParent: ManualParentRef,
+		OwnerProjectRoot: repo, IssueNum: -1, WorktreePath: repo,
+		Session: route.Session, SocketPath: route.SocketPath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "w9", Label: previous.Label,
+			PaneID: "w9:p1", TerminalID: "term-w9", CurrentPath: repo,
+		},
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := locked.RecordPane(managedCoordinatorPane(
+		state.LaunchIntent{Resource: previous}, route, ManualParentRef, -2,
+	)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ReconcileManagedCoordinatorReplanRow(locked, []state.RuntimeResource{previous}, current); err != nil {
+		t.Fatalf("ReconcileManagedCoordinatorReplanRow() = %v, want heal", err)
+	}
+	if len(locked.Panes) != 1 || locked.Panes[0].IssueNum != -2 ||
+		locked.Panes[0].WorkspaceID != "w9" || locked.Panes[0].PaneID != "w9:p1" ||
+		locked.Panes[0].TerminalID != "term-w9" {
+		t.Fatalf("reconciled rows = %+v, want the same number carrying current identity", locked.Panes)
+	}
+}
+
+func TestReconcileManagedCoordinatorReplanRowRejectsUnconfirmedPreviousRow(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	previous := state.RuntimeResource{
+		WorkspaceID: "w2", Label: "fanout-coordinator-previous-token",
+		PaneID: "w2:p1", TerminalID: "term-w2", CurrentPath: repo,
+	}
+	current := state.LaunchIntent{
+		ID: "coordinator-replan", Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: ManualParentRef, RuntimeParent: ManualParentRef,
+		OwnerProjectRoot: repo, IssueNum: -1, WorktreePath: repo,
+		Session: route.Session, SocketPath: route.SocketPath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "w9", Label: "fanout-coordinator-current-token",
+			PaneID: "w9:p1", TerminalID: "term-w9", CurrentPath: repo,
+		},
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	stale := managedCoordinatorPane(state.LaunchIntent{Resource: previous}, route, ManualParentRef, -2)
+	stale.WorkspaceID = "foreign"
+	if err := locked.RecordPane(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ReconcileManagedCoordinatorReplanRow(locked, []state.RuntimeResource{previous}, current); err == nil {
+		t.Fatal("ReconcileManagedCoordinatorReplanRow() succeeded without previous identity proof")
+	}
+	if len(locked.Panes) != 1 || locked.Panes[0].WorkspaceID != "foreign" {
+		t.Fatalf("unconfirmed row changed: %+v", locked.Panes)
+	}
+}
+
+func TestReconcileManagedCoordinatorReplanRowRejectsAmbiguousPredecessors(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	predecessors := []state.RuntimeResource{
+		{
+			WorkspaceID: "w1", Label: "fanout-coordinator-previous-one",
+			PaneID: "w1:p1", TerminalID: "term-w1", CurrentPath: repo,
+		},
+		{
+			WorkspaceID: "w2", Label: "fanout-coordinator-previous-two",
+			PaneID: "w2:p1", TerminalID: "term-w2", CurrentPath: repo,
+		},
+	}
+	current := state.LaunchIntent{
+		ID: "coordinator-replan", Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: ManualParentRef, RuntimeParent: ManualParentRef,
+		OwnerProjectRoot: repo, IssueNum: -1, WorktreePath: repo,
+		Session: route.Session, SocketPath: route.SocketPath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "w9", Label: "fanout-coordinator-current-token",
+			PaneID: "w9:p1", TerminalID: "term-w9", CurrentPath: repo,
+		},
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for index, predecessor := range predecessors {
+		if err := locked.RecordPane(managedCoordinatorPane(
+			state.LaunchIntent{Resource: predecessor}, route, ManualParentRef, -2-index,
+		)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ReconcileManagedCoordinatorReplanRow(locked, predecessors, current); err == nil {
+		t.Fatal("ReconcileManagedCoordinatorReplanRow() accepted ambiguous predecessor rows")
+	}
+	if len(locked.Panes) != 2 || locked.Panes[0].WorkspaceID != "w1" || locked.Panes[1].WorkspaceID != "w2" {
+		t.Fatalf("ambiguous rows changed: %+v", locked.Panes)
 	}
 }
 

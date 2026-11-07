@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -28,23 +29,34 @@ func runtimeLifecycleOptions(projectRoot, statePath string, hookConfig hooks.Con
 // session that can retire its workspace. Every recheck below is an admission
 // gate, not a convenience: a row whose repository or owned route drifted names
 // a workspace this run must not close.
+// Shared attached cleanup passes its lock-verified source child here, after
+// comparing both saved routes; the attached row itself owns no checkout.
 func newWorkspaceLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntimeFactory {
 	return func(ctx context.Context, pane state.Pane) (lifecycle.WorkspaceRuntime, error) {
 		identity, err := worktree.ResolveRepoIdentity(ctx, projectRoot)
 		if err != nil {
 			return nil, err
 		}
-		if filepath.Clean(pane.RepoKey) != identity.RepoKey ||
-			filepath.Clean(pane.RepoRoot) != identity.RepoRoot {
-			return nil, fmt.Errorf("saved Herdr row belongs to a different repository")
+		if !workspaceLifecycleRepositoryMatches(pane, identity) {
+			return nil, fmt.Errorf("%w: saved Herdr row belongs to a different repository", backend.ErrOwnedIdentityMismatch)
 		}
 		owned, err := paneruntime.Open(ctx, identity.RepoKey)
 		if err != nil {
 			return nil, err
 		}
 		if owned.Session != pane.SessionID || owned.SocketPath != pane.SocketPath {
-			return nil, fmt.Errorf("saved Herdr row belongs to a different owned route")
+			return nil, fmt.Errorf("%w: saved Herdr row belongs to a different owned route", backend.ErrOwnedIdentityMismatch)
 		}
 		return owned, nil
 	}
+}
+
+func workspaceLifecycleRepositoryMatches(pane state.Pane, identity worktree.RepoIdentity) bool {
+	// Checkout-free coordinators are bound to their persisted intent before
+	// opening this route; their state rows deliberately have no Git provenance.
+	if pane.IsShell() && pane.RepoKey == "" && pane.RepoRoot == "" {
+		return filepath.Clean(pane.WorktreePath) == identity.RepoRoot
+	}
+	return filepath.Clean(pane.RepoKey) == identity.RepoKey &&
+		filepath.Clean(pane.RepoRoot) == identity.RepoRoot
 }

@@ -21,8 +21,8 @@ const (
 )
 
 type legacyRemoveRejection struct {
-	ID     string          `json:"id"`
-	Result json.RawMessage `json:"result"`
+	ID     string           `json:"id"`
+	Result *json.RawMessage `json:"result"`
 	Error  *struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
@@ -40,6 +40,9 @@ func recoverWorkspaceCleanup(
 ) (state.LaunchIntent, error) {
 	if intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen {
 		return recoverIssuedReopen(ctx, opts, journal, runtime, intent)
+	}
+	if intent.Status == state.IntentManualCleanupRequired && isLegacyDirtyWorktreeRejection(intent) {
+		return replanCurrentWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
 	}
 	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
 	if err != nil {
@@ -89,7 +92,7 @@ func isLegacyDirtyWorktreeRejection(intent state.LaunchIntent) bool {
 	}
 	return !slices.Contains([]bool{
 		envelope.ID == "cli:worktree:remove",
-		len(envelope.Result) == 0,
+		envelope.Result == nil,
 		envelope.Error.Code == "dirty_worktree_requires_force",
 		strings.TrimSpace(envelope.Error.Message) != "",
 	}, false)
@@ -98,7 +101,6 @@ func isLegacyDirtyWorktreeRejection(intent state.LaunchIntent) bool {
 func decodeLegacyRemoveRejection(payload string) (legacyRemoveRejection, bool) {
 	var envelope legacyRemoveRejection
 	decoder := json.NewDecoder(strings.NewReader(payload))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&envelope); err != nil {
 		return legacyRemoveRejection{}, false
 	}
@@ -153,6 +155,9 @@ func adoptReopenedWorkspace(
 	checkout worktree.CheckoutObservation,
 ) (state.LaunchIntent, error) {
 	resource := resourceFromObservation(workspace)
+	if err := verifyReopenedWorkspaceCleanupShell(intent, resource, workspace); err != nil {
+		return intent, markWorkspaceCleanupManual(journal, intent, err)
+	}
 	if err := verifyCleanupCheckout(ctx, opts.ProjectRoot, intent.FullBranchRef, intent.ExpectedHead, resource); err != nil {
 		return intent, markWorkspaceCleanupManual(journal, intent, err)
 	}
@@ -173,6 +178,7 @@ func executeReopen(
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
 	intent state.LaunchIntent,
+	lg Logger,
 ) (state.LaunchIntent, error) {
 	if err := verifyReopenPreconditions(ctx, opts, runtime, intent); err != nil {
 		return intent, err
@@ -195,7 +201,7 @@ func executeReopen(
 	if recovered.Status == state.IntentRealized {
 		return recovered, nil
 	}
-	return executeRemove(ctx, opts, journal, runtime, recovered)
+	return executeRemove(ctx, opts, journal, runtime, recovered, lg)
 }
 
 func issueReopen(
@@ -231,13 +237,16 @@ func verifyReopenPreconditions(
 	if observation.workspace != nil || observation.checkout.PathAbsent || !observation.checkout.Registered {
 		return fmt.Errorf("herdr cleanup reopen preconditions changed")
 	}
-	return verifyCleanupCheckout(
+	if err := verifyCleanupCheckout(
 		ctx,
 		opts.ProjectRoot,
 		intent.FullBranchRef,
 		intent.ExpectedHead,
 		intent.Resource,
-	)
+	); err != nil {
+		return err
+	}
+	return verifyRemovableCheckoutContents(ctx, intent.WorktreePath)
 }
 
 func currentCoordinator(
@@ -262,8 +271,19 @@ func executeRemove(
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
 	intent state.LaunchIntent,
+	lg Logger,
 ) (state.LaunchIntent, error) {
 	if err := verifyRemovePreconditions(ctx, opts, runtime, intent); err != nil {
+		return intent, err
+	}
+	if err := ensureCleanupMutationFresh(ctx, intent); err != nil {
+		return intent, err
+	}
+	removed, err := worktree.CleanIgnoredFiles(ctx, intent.WorktreePath)
+	if removed > 0 {
+		lg.Info("Herdr cleanup removed %d ignored files from %s", removed, intent.WorktreePath)
+	}
+	if err != nil {
 		return intent, err
 	}
 	issued, mutationErr := issueCleanupMutation(ctx, journal, &intent, func() error {
@@ -343,10 +363,8 @@ func verifyRemovableCheckoutContents(ctx context.Context, path string) error {
 		return err
 	}
 	switch contentState {
-	case worktree.CheckoutClean:
+	case worktree.CheckoutClean, worktree.CheckoutIgnoredOnly:
 		return nil
-	case worktree.CheckoutIgnoredOnly:
-		return fmt.Errorf("herdr checkout %s contains ignored files only; remove them before retrying cleanup", path)
 	default:
 		return fmt.Errorf("herdr checkout %s has tracked or untracked changes; preserve or remove them before retrying cleanup", path)
 	}
@@ -408,7 +426,9 @@ func restorePlannedCleanup(
 	cause error,
 ) (state.LaunchIntent, error) {
 	intent.Status = state.IntentPlanned
-	intent.Failure = ""
+	if intent.Failure != sharedAttachedWorkspaceCloseComplete {
+		intent.Failure = ""
+	}
 	return intent, errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
 }
 
@@ -417,12 +437,13 @@ func resetUnissuedCleanup(
 	intent state.LaunchIntent,
 	cause error,
 ) (state.LaunchIntent, error) {
-	if intent.Coordinator == (state.RuntimeResource{}) || intent.CleanupPhase == state.CleanupReopen {
-		journal.RemoveIntent(intent.ID)
-		return intent, errors.Join(cause, journal.Save())
+	if intent.Failure == sharedAttachedWorkspaceCloseComplete {
+		intent.Status = state.IntentPlanned
+		intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
+		return intent, errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
 	}
 	intent.Status = state.IntentPlanned
-	intent.ExpiresUnixMS = time.Now().UnixMilli()
+	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
 	intent.Failure = ""
 	return intent, errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
 }

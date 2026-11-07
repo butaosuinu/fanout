@@ -113,7 +113,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	}
 	cliCfg := cfg.CLIConfig()
 
-	store, recorder, code := LoadState(cfg.DryRun, rt.Info.ProjectRoot, lg)
+	store, recorder, code := LoadState(cfg.DryRun, rt, lg)
 	if code != exitcode.OK {
 		return TaskExecutionResult{}, code
 	}

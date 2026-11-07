@@ -53,6 +53,14 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func isolateBackendEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SESSION", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+}
+
 func TestIsManagedConsoleWorkloadRequestMatchesOnlyTheReservedToken(t *testing.T) {
 	tests := []struct {
 		name string
@@ -115,6 +123,67 @@ func pinConsoleAttachSeams(t *testing.T, isTerminal bool, exec func(backend.Atta
 	})
 	stdioIsTerminal = func() bool { return isTerminal }
 	execSessionAttach = exec
+}
+
+type consoleReexecRuntime struct {
+	panelaunch.ManagedSessionRuntime
+	path string
+}
+
+func (f consoleReexecRuntime) LaunchRoute() (backend.OwnedLaunchRoute, error) {
+	return backend.OwnedLaunchRoute{LauncherPath: f.path}, nil
+}
+
+func (consoleReexecRuntime) VerifyOwnedTarget(backend.OwnedPaneIdentity) error { return nil }
+
+func TestReexecManagedConsolePinsManualReopenAndAvoidsLoop(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	initTUITestGitRepo(t, root)
+	commitTUITestGitRepo(t, root)
+	locked, err := state.LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := state.Pane{
+		Parent: panelaunch.ManualParentRef, RuntimeParent: panelaunch.ManagedConsoleRuntimeParent,
+		IssueNum: -1, Kind: state.PaneKindShell, Agent: state.PaneKindShell,
+		Backend: backend.Herdr, WorktreePath: root, PaneID: "console",
+		WorkspaceID: "workspace", WorkspaceLabel: "owned-console", TerminalID: "terminal",
+		SessionID: "owned", SocketPath: "/tmp/owned.sock",
+	}
+	if err = errors.Join(locked.RecordPane(pane), locked.Unlock()); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_PANE_ID", pane.PaneID)
+	t.Setenv("FANOUT_REEXEC_TEST", "preserve")
+	current, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/owned/launcher/fanout", current} {
+		t.Run(path, func(t *testing.T) {
+			calls := 0
+			failure := errors.New("test exec returned")
+			pinConsoleAttachSeams(t, false, func(spec backend.AttachExec) error {
+				calls++
+				if spec.Path != path || !reflect.DeepEqual(spec.Argv, []string{path}) || !slices.Contains(spec.Env, "FANOUT_REEXEC_TEST=preserve") {
+					t.Fatal("reexec changed executable, arguments or environment")
+				}
+				return failure
+			})
+			err := reexecManagedConsole(root, consoleReexecRuntime{path: path})
+			if path == current {
+				if err != nil || calls != 0 {
+					t.Fatalf("pinned executable looped: %v, calls=%d", err, calls)
+				}
+			} else if !errors.Is(err, failure) || calls != 1 {
+				t.Fatalf("manual reopen = %v, calls=%d", err, calls)
+			}
+		})
+	}
 }
 
 func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.T) {
@@ -259,6 +328,78 @@ func TestHandoffConsoleShellSkipsWithoutARunnableRecordedShell(t *testing.T) {
 	}
 }
 
+func TestEnterManagedConsoleSyncsDashboardAfterConsoleStateCommit(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		store state.Store
+	}{
+		{name: "initial"},
+		{name: "stale replacement", store: state.Store{Panes: []state.Pane{{
+			PaneID: "old-pane", WorkspaceID: "old-workspace",
+			SessionID: "owned-session", SocketPath: "/owned.sock",
+		}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			originalEnsure := ensureManagedSessionForTUI
+			originalConsole := ensureManagedConsoleForTUI
+			originalSync := syncManagedDashboardKeyForTUI
+			t.Cleanup(func() {
+				ensureManagedSessionForTUI = originalEnsure
+				ensureManagedConsoleForTUI = originalConsole
+				syncManagedDashboardKeyForTUI = originalSync
+			})
+			owned := &herdrrun.OwnedSession{Session: "owned-session"}
+			ensureManagedSessionForTUI = func(string) (*herdrrun.OwnedSession, error) {
+				return owned, nil
+			}
+			store := tt.store
+			consoleCommitted := false
+			ensureManagedConsoleForTUI = func(
+				context.Context,
+				string,
+				panelaunch.ManagedSessionRuntime,
+				[]string,
+				string,
+			) (panelaunch.ManagedConsoleResult, error) {
+				store.Panes = []state.Pane{{
+					PaneID: "new-pane", WorkspaceID: "new-workspace",
+					SessionID: "owned-session", SocketPath: "/owned.sock",
+				}}
+				consoleCommitted = true
+				return panelaunch.ManagedConsoleResult{
+					Pane: state.Pane{PaneID: "new-pane"}, AttachCommand: "attach",
+				}, nil
+			}
+			syncCalls := 0
+			syncManagedDashboardKeyForTUI = func(
+				_ *log.Logger,
+				_ bool,
+				root string,
+				got paneruntime.ManagedSession,
+			) {
+				if !consoleCommitted || root != "/repo" || got != owned {
+					t.Fatalf("dashboard sync ran before console commit: committed=%t root=%q owned=%p", consoleCommitted, root, got)
+				}
+				owners := dashboardShortcutOwners(paneruntime.ProjectStore{Root: root, Store: store})
+				if len(owners) != 1 || owners[0].PaneID != "new-pane" || owners[0].WorkspaceID != "new-workspace" {
+					t.Fatalf("dashboard owners = %+v, want committed console", owners)
+				}
+				syncCalls++
+			}
+			if code := enterManagedConsole(
+				"/repo",
+				backend.Selection{Name: backend.Herdr, Reason: backend.ReasonUserConfig},
+				discardLogger(),
+			); code != exitcode.OK {
+				t.Fatalf("enterManagedConsole() = %d, want OK", code)
+			}
+			if syncCalls != 1 {
+				t.Fatalf("dashboard sync calls = %d, want 1", syncCalls)
+			}
+		})
+	}
+}
+
 func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 	opts := fanouttui.Options{}
 	owned := &herdrrun.OwnedSession{Session: "owned-session"}
@@ -270,6 +411,7 @@ func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 		settings.Defaults(),
 		hooks.EmptyConfig(),
 		owned,
+		nil,
 	)
 	if opts.LaunchPane == nil || opts.LaunchAttach == nil || opts.LaunchIssue == nil ||
 		opts.LaunchIssuePlan == nil || opts.LaunchShell == nil || opts.FocusManagedPane == nil ||
@@ -281,6 +423,108 @@ func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 	}
 	if opts.RestorePanes != nil || opts.LifecycleCloseOwned != nil {
 		t.Fatal("owned Herdr wiring enabled deferred restore/lifecycle ports")
+	}
+}
+
+func TestWrapManagedTUILaunchesSyncsOwnersAfterEveryCreatedPanePath(t *testing.T) {
+	activeLaunch := false
+	syncCalls := 0
+	store := state.Store{}
+	recordOwner := func(paneID, workspaceID string) {
+		store.Panes = append(store.Panes, state.Pane{
+			PaneID: paneID, WorkspaceID: workspaceID,
+			SessionID: "session", SocketPath: "/socket",
+		})
+	}
+	syncOwners := func() {
+		if activeLaunch {
+			t.Fatal("dashboard owners synced before the launch returned and released its state lock")
+		}
+		owners := dashboardShortcutOwners(paneruntime.ProjectStore{Root: "/repo", Store: store})
+		if len(owners) != syncCalls+1 {
+			t.Fatalf("dashboard owners at sync %d = %+v, want the newly recorded identity", syncCalls+1, owners)
+		}
+		syncCalls++
+	}
+	withLaunch := func() func() {
+		activeLaunch = true
+		return func() { activeLaunch = false }
+	}
+	partialErr := errors.New("later pane failed")
+	opts := fanouttui.Options{
+		LaunchPane: func(fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
+			defer withLaunch()()
+			recordOwner("manual-pane", "manual-workspace")
+			return fanouttui.LaunchResult{CreatedPaneIDs: []string{"manual-pane"}}, partialErr
+		},
+		LaunchAttach: func(fanouttui.AttachLaunchRequest) (string, error) {
+			defer withLaunch()()
+			recordOwner("attach-pane", "attach-workspace")
+			return "attached", nil
+		},
+		LaunchIssue: func(int, string, map[string]string) (fanouttui.LaunchResult, error) {
+			defer withLaunch()()
+			recordOwner("issue-pane", "issue-workspace")
+			return fanouttui.LaunchResult{CreatedPaneIDs: []string{"issue-pane"}}, nil
+		},
+		LaunchIssuePlan: func(int, string, string) (fanouttui.LaunchResult, error) {
+			defer withLaunch()()
+			recordOwner("plan-pane", "plan-workspace")
+			return fanouttui.LaunchResult{CreatedPaneIDs: []string{"plan-pane"}}, nil
+		},
+		LaunchShell: func(fanouttui.ShellLaunchRequest) error {
+			defer withLaunch()()
+			recordOwner("shell-pane", "shell-workspace")
+			return nil
+		},
+	}
+	wrapManagedTUILaunches(&opts, syncOwners)
+
+	if _, err := opts.LaunchPane(fanouttui.LaunchRequest{}); !errors.Is(err, partialErr) {
+		t.Fatalf("partial manual launch error = %v, want %v", err, partialErr)
+	}
+	if _, err := opts.LaunchAttach(fanouttui.AttachLaunchRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opts.LaunchIssue(1, "codex", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opts.LaunchIssuePlan(1, "codex", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := opts.LaunchShell(fanouttui.ShellLaunchRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if syncCalls != 5 {
+		t.Fatalf("dashboard owner sync calls = %d, want every managed launch path", syncCalls)
+	}
+}
+
+func TestWrapManagedTUILaunchesSkipsFailedUnrecordedLaunches(t *testing.T) {
+	wantErr := errors.New("launch failed")
+	syncCalls := 0
+	opts := fanouttui.Options{
+		LaunchPane: func(fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
+			return fanouttui.LaunchResult{}, wantErr
+		},
+		LaunchAttach: func(fanouttui.AttachLaunchRequest) (string, error) { return "", wantErr },
+		LaunchIssue: func(int, string, map[string]string) (fanouttui.LaunchResult, error) {
+			return fanouttui.LaunchResult{}, wantErr
+		},
+		LaunchIssuePlan: func(int, string, string) (fanouttui.LaunchResult, error) {
+			return fanouttui.LaunchResult{}, wantErr
+		},
+		LaunchShell: func(fanouttui.ShellLaunchRequest) error { return wantErr },
+	}
+	wrapManagedTUILaunches(&opts, func() { syncCalls++ })
+
+	_, _ = opts.LaunchPane(fanouttui.LaunchRequest{})
+	_, _ = opts.LaunchAttach(fanouttui.AttachLaunchRequest{})
+	_, _ = opts.LaunchIssue(1, "codex", nil)
+	_, _ = opts.LaunchIssuePlan(1, "codex", "codex")
+	_ = opts.LaunchShell(fanouttui.ShellLaunchRequest{})
+	if syncCalls != 0 {
+		t.Fatalf("dashboard owner sync calls = %d, want none for unrecorded failures", syncCalls)
 	}
 }
 
@@ -298,7 +542,7 @@ func TestSettingsReloadPreservesHerdrNewSessionLaunch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reload := newTUISettingsReloadFunc(
 				repo, "owned-session", "fanout", hooks.EmptyConfig(),
-				backend.Selection{Name: backend.Herdr}, false, tt.admitted, discardLogger(),
+				backend.Selection{Name: backend.Herdr}, false, tt.admitted, nil, nil, discardLogger(),
 			)
 			runtime, err := reload()
 			if err != nil {
@@ -443,11 +687,11 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SESSION", "dev-session")
 	t.Setenv("TMUX", "nested-tmux")
 	t.Setenv("TMUX_PANE", "%nested")
-	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("FANOUT_WATCHER", "1")
 	t.Setenv("FANOUT_NOTIFICATIONS", "tmux")
 	tmuxLogPath := installTUIDashboardTmuxShim(t)
@@ -543,11 +787,11 @@ func TestCmdTUIHerdrContextUsesOwnerRootFromChildWorktree(t *testing.T) {
 	initTUITestGitRepo(t, child)
 	commitTUITestGitRepo(t, child)
 	t.Chdir(child)
+	isolateBackendEnv(t)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SESSION", "dev-session")
 	t.Setenv("TMUX", "nested-tmux")
 	t.Setenv("TMUX_PANE", "%nested")
-	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("FANOUT_NOTIFICATIONS", "none")
 	tmuxLogPath := installTUIDashboardTmuxShim(t)
 
@@ -579,10 +823,9 @@ func TestCmdTUIUserConfiguredHerdrOutsideContextBootstrapsWithoutTmux(t *testing
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
 	t.Chdir(repo)
-	t.Setenv("HERDR_ENV", "")
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "")
 	t.Setenv("TMUX_PANE", "")
-	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	tmuxLogPath := installTUIDashboardTmuxShim(t)
 	configPath := settings.UserConfigPath()
@@ -650,6 +893,7 @@ func TestCmdTUIRegistersDashboardKeybinds(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	argsPath := installTUIDashboardTmuxShim(t)
@@ -676,6 +920,7 @@ func TestCmdTUIRegistersConsoleKeybinds(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	argsPath := installTUIDashboardTmuxShim(t)
@@ -702,6 +947,7 @@ func TestCmdTUIWiresActivePaneProvider(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	installTUIDashboardTmuxShim(t)
@@ -735,6 +981,7 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	installTUIDashboardTmuxShim(t)
@@ -824,6 +1071,7 @@ func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	t.Setenv("FANOUT_DASHBOARD_KEYBIND", "0")
@@ -855,6 +1103,7 @@ func TestCmdTUINoDashboardKeybindKeepsConsoleKeybind(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	t.Setenv("FANOUT_DASHBOARD_KEYBIND", "0")
@@ -884,6 +1133,7 @@ func TestCmdTUINoConsoleKeybindHonorsEnv(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	t.Setenv("FANOUT_CONSOLE_KEYBIND", "0")
@@ -922,7 +1172,10 @@ func TestTUISettingsReloadCleansDisabledKeybinds(t *testing.T) {
 	}
 	argsPath := installTUISettingsReloadTmuxShim(t)
 
-	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, true, true, discardLogger())
+	reload := newTUISettingsReloadFunc(
+		repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux},
+		true, true, nil, nil, discardLogger(),
+	)
 	if _, err := reload(); err != nil {
 		t.Fatal(err)
 	}
@@ -1634,6 +1887,7 @@ func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	installFakeExecutable(t, "claude")
 	installTUITmuxShim(t, "%77")
 
@@ -1647,9 +1901,9 @@ func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
 	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%77", "%77"}) {
 		t.Fatalf("created pane ids = %#v, want creation-order ids", result.CreatedPaneIDs)
 	}
-	if len(result.CreatedBindings) != 2 || result.CreatedBindings[0].Row == result.CreatedBindings[1].Row ||
-		result.CreatedBindings[0].Ref.Pane != "%77" || result.CreatedBindings[1].Ref.Pane != "%77" {
-		t.Fatalf("created bindings = %+v, want distinct rows in creation order", result.CreatedBindings)
+	if len(result.CreatedBindings) != 2 || result.CreatedBindings[0].Row.IssueNum != -1 ||
+		result.CreatedBindings[1].Row.IssueNum != -2 {
+		t.Fatalf("created bindings = %+v, want distinct manual rows in creation order", result.CreatedBindings)
 	}
 
 	store, err := state.LoadProject(repo)
@@ -1672,6 +1926,7 @@ func TestLaunchManualPaneFromTUIReportsPartialMultipleLaunch(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	installFakeExecutable(t, "claude")
 	installTUITmuxShim(t, "%77")
 	counter := filepath.Join(t.TempDir(), "hook-count")
@@ -1791,6 +2046,7 @@ func TestLaunchShellPaneFromTUIRecordsSelectedWorktreeShellInSourceRoot(t *testi
 func TestLaunchAttachedAgentFromTUIRecordsAttachedAgentState(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	targetPath := filepath.Join(repo, ".fanout", "worktrees", "child")
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {
 		t.Fatal(err)
@@ -1844,6 +2100,7 @@ func TestLaunchAttachedAgentFromTUIRecordsAttachedAgentState(t *testing.T) {
 func TestLaunchAttachedAgentFromTUIRecordsActualWatcherParent(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	targetPath := filepath.Join(repo, ".fanout", "worktrees", "watched")
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {
 		t.Fatal(err)
@@ -1883,6 +2140,7 @@ func TestLaunchAttachedAgentFromTUIRecordsStateInSourceRoot(t *testing.T) {
 	sibling := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	initTUITestGitRepo(t, sibling)
+	isolateBackendEnv(t)
 	targetPath := filepath.Join(sibling, ".fanout", "worktrees", "child")
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {
 		t.Fatal(err)

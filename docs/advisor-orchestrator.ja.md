@@ -91,7 +91,9 @@ Fable advisor を直接呼ぶ純正経路は存在しない**。claude CLI 側�
    実行させる前例。advisor ペインの雛形になる
 4. **agent registry**(`internal/core/agent`)— 起動コマンドの組み立て点。
    現状 LaunchArgs は静的で外部注入の口がなく、#363(`--agent
-   NUM=name:model` 構文)が作る注入機構が本設計の土台になる
+   NUM=name[:model[:effort]]` 構文。決定記録
+   [model-effort-selection.ja.md](model-effort-selection.ja.md))が作る
+   注入機構が本設計の土台になる
 
 ## パターン設計
 
@@ -102,8 +104,9 @@ plan fan-out がコーディネータペインを起動し、fanout-plan skill �
 `fanout plan --agent <task-id>=codex` でワーカーを振り分ける。欠けている
 のは 2 つ。
 
-- コーディネータのモデル指定(fable 固定)。#363 の `name:model` 構文を
-  コーディネータ起動にも通す
+- コーディネータのモデル指定(fable 固定)。#365 の settings
+  `newSessionModels`(coordinator は new-session lane)で指定する。文法は
+  #363 の `name[:model[:effort]]`
 - fanout-plan skill 側の分業レシピ。「Fable が計画と統合判断、focused な
   実装タスクは codex ワーカー」という推奨手順と、その根拠(orchestrator
   ベンチ数値)を skill に書く
@@ -285,17 +288,20 @@ post-work-review(claude 実装 → codex レビュー)の鏡像。codex 子が�
 
 ## 既存エピック・issue との依存
 
-- **#368 モデル細粒度指定(土台)**: #363(`name:model` 構文と注入機構)に
-  A のコーディネータモデル指定・B の advisor モデル固定・C のパススルーが
-  依存する。#365(エージェント別デフォルトモデル settings)に C の
-  advisorModel 設定が依存する。#362 spike とは知見を相互参照する
+- **#368 モデル細粒度指定(土台)**: #363(`name[:model[:effort]]` 構文と
+  注入機構)に A のコーディネータモデル指定・B の advisor モデル固定・C の
+  パススルーが依存する。#365(lane 別デフォルトモデル settings
+  `newSessionModels` / `orchestratorModels` / `childModels`)に A の
+  coordinator 指定と C の advisorModel 設定が依存する。#362 spike とは
+  知見を相互参照する
 - **#381 fanout wait**(soft): B の相談往復の待機に使える
 - **#105 トークン/コスト可観測性**(soft): 相談回数・quota 削減の効果測定
   に必要
 
 roadmap(2026-07-02 棚卸し)上は #368 が週 2〜3 で進行中。本エピックの
 spike 2 本は独立に着手できる。コア配線の #363/#365 依存は一様ではない —
-#455/#458 は #363 のみ、#457 は #363 と #365 の両方、#459(クロスモデル
+#455 は #363 のみ、#457 と #458 は #363 と #365 の両方(#458 の coordinator
+モデル指定は #365 の `newSessionModels` で満たすため)、#459(クロスモデル
 レビュー)は #363/#365 のいずれにも依存せず spike #454 の直後に着手できる。
 roadmap への組み込みは次回棚卸しで判断する。
 
@@ -319,7 +325,7 @@ roadmap への組み込みは次回棚卸しで判断する。
 | 1 | #454 | [spike] claude --advisor パススルーと headless fable の実機検証 | なし |
 | 2 | #455 | advisor ペイン起動と roster への role 登録 | #453, #363 |
 | 2 | #457 | claude 子への --advisor パススルー | #454, #363, #365 |
-| 2 | #458 | orchestrator レシピ(coordinator モデル指定 + skill) | #454, #363 |
+| 2 | #458 | orchestrator レシピ(coordinator モデル指定 + skill) | #454, #363, #365 |
 | 2 | #459 | クロスモデルレビュー skill + briefing gate | #454 |
 | 3 | #456 | briefing 相談プロトコル文面 + SKILL.md nudge 記述修正 | #455 |
 | 3 | #460 | README / site 反映(en/ja) | #455, #456, #457, #458, #459 |

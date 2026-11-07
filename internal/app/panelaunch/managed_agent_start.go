@@ -287,8 +287,10 @@ func sameManagedLaunchGeneration(latest, want state.LaunchIntent) bool {
 	latestLaunch := *latest.Launch
 	wantLaunch := *want.Launch
 	latestLaunch.PendingReportedState = ""
+	latestLaunch.PendingReportedSeq = 0
 	latestLaunch.PendingAgentSession = nil
 	wantLaunch.PendingReportedState = ""
+	wantLaunch.PendingReportedSeq = 0
 	wantLaunch.PendingAgentSession = nil
 	latest.Launch = &latestLaunch
 	want.Launch = &wantLaunch
@@ -445,17 +447,7 @@ func verifyManagedLauncherProcess(
 	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 ) error {
-	if info.ShellPID <= 1 || info.ForegroundProcessGroup <= 1 {
-		return fmt.Errorf("herdr launcher process group is incomplete")
-	}
-	for _, process := range info.ForegroundProcesses {
-		if process.PID == info.ShellPID && process.CWD == intent.WorktreePath &&
-			process.ProcessGroup == info.ForegroundProcessGroup && process.Executable == route.LauncherPath &&
-			process.Argv0 == route.LauncherPath && len(process.Argv) == 0 {
-			return nil
-		}
-	}
-	return fmt.Errorf("herdr launcher process identity does not match the bundled fanout executable")
+	return backend.VerifyLauncherProcess(info, intent.WorktreePath, route.LauncherPath)
 }
 
 func verifyManagedAgentProcess(info backend.PaneProcessInfo, intent state.LaunchIntent) error {
@@ -572,7 +564,7 @@ func exactManagedLaunchPane(
 			intent.Resource.Label != "", pane.WorkspaceLabel == intent.Resource.Label,
 			pane.Ref.Pane == intent.Resource.PaneID,
 			pane.TerminalID == intent.Resource.TerminalID,
-			pane.RepoKey == intent.Resource.RepoKey,
+			state.CleanRuntimeResourcePath(pane.RepoKey) == state.CleanRuntimeResourcePath(intent.Resource.RepoKey),
 			filepath.Clean(pane.CurrentPath) == filepath.Clean(intent.WorktreePath),
 			pane.SessionID == intent.Session, pane.SocketPath == intent.SocketPath,
 			pane.AgentPresent, pane.AgentID == wantAgentID,

@@ -14,9 +14,11 @@ import (
 
 func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 	intent := state.LaunchIntent{
-		ID: "issue:3:524:529",
+		ID:           "issue:3:524:529",
+		WorktreePath: "/repo/worktree",
 		Resource: state.RuntimeResource{
-			WorkspaceID: "workspace-1", PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
+			WorkspaceID: "workspace-1", Label: "owned-label-1",
+			PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
 		},
 	}
 	route := backend.OwnedLaunchRoute{
@@ -40,27 +42,34 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 	}
 	settings := backendArgs[1]
 	if !strings.Contains(settings, `"matcher":"`+managedClaudeExitReasons+`"`) ||
-		!strings.Contains(settings, `"timeout":15`) ||
+		!strings.Contains(settings, `"timeout":31`) ||
+		!strings.Contains(settings, telemetry.SequenceCommand) ||
+		strings.Contains(settings, "$FANOUT_EMITTER_STATE_PATH.sequence") ||
 		strings.Contains(settings, "clear") || strings.Contains(settings, "resume") {
 		t.Fatalf("SessionEnd settings = %s", settings)
+	}
+	if !strings.Contains(settings, telemetry.Command+` working >/dev/null 2>&1 \"$__fanout_event_sequence\"`) {
+		t.Fatalf("working emitter args = %s", settings)
 	}
 	if !telemetry.ValidNonce(launch.nonce) {
 		t.Fatalf("emitter nonce = %q", launch.nonce)
 	}
 	environment := environmentMap(t, launch.environment)
 	want := map[string]string{
-		telemetry.EmitterPathEnv:  "/repo/.fanout/state.json",
-		telemetry.RowKeyEnv:       intent.ID,
-		telemetry.LaunchNonceEnv:  strings.Repeat("a", 32),
-		telemetry.EmitterNonceEnv: launch.nonce,
-		telemetry.BackendEnv:      "herdr",
-		telemetry.SessionEnv:      route.Session,
-		telemetry.SocketPathEnv:   route.SocketPath,
-		telemetry.WorkspaceIDEnv:  intent.Resource.WorkspaceID,
-		telemetry.PaneIDEnv:       intent.Resource.PaneID,
-		telemetry.TerminalIDEnv:   intent.Resource.TerminalID,
-		telemetry.AgentEnv:        "claude",
-		telemetry.AgentIDEnv:      "fanout-agent",
+		telemetry.EmitterPathEnv:    "/repo/.fanout/state.json",
+		telemetry.RowKeyEnv:         intent.ID,
+		telemetry.LaunchNonceEnv:    strings.Repeat("a", 32),
+		telemetry.EmitterNonceEnv:   launch.nonce,
+		telemetry.BackendEnv:        "herdr",
+		telemetry.SessionEnv:        route.Session,
+		telemetry.SocketPathEnv:     route.SocketPath,
+		telemetry.WorkspaceIDEnv:    intent.Resource.WorkspaceID,
+		telemetry.WorkspaceLabelEnv: intent.Resource.Label,
+		telemetry.WorktreePathEnv:   intent.WorktreePath,
+		telemetry.PaneIDEnv:         intent.Resource.PaneID,
+		telemetry.TerminalIDEnv:     intent.Resource.TerminalID,
+		telemetry.AgentEnv:          "claude",
+		telemetry.AgentIDEnv:        "fanout-agent",
 	}
 	for key, value := range want {
 		if environment[key] != value {
@@ -133,7 +142,9 @@ func TestManagedEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testi
 }
 
 func TestApplyManagedLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) {
-	pane := state.Pane{Backend: "herdr"}
+	pane := state.Pane{
+		Backend: "herdr", EmitterRebindNonce: strings.Repeat("c", 32), EmitterRebindSequence: 7,
+	}
 	intent := state.LaunchIntent{
 		ID: "issue:3:524:529",
 		Launch: &state.LaunchCapsule{
@@ -145,7 +156,9 @@ func TestApplyManagedLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T
 	if pane.ReportedState != "running" || pane.StateRefinement {
 		t.Fatalf("initial telemetry = (%q, %t), want synthetic running without refinement", pane.ReportedState, pane.StateRefinement)
 	}
-	if pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce || pane.EmitterNonce != intent.Launch.EmitterNonce {
+	if pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce ||
+		pane.EmitterNonce != intent.Launch.EmitterNonce || pane.EmitterRebindNonce != "" ||
+		pane.EmitterRebindSequence != 0 {
 		t.Fatalf("launch binding = %+v", pane)
 	}
 }
@@ -175,13 +188,13 @@ func TestApplyManagedLaunchTelemetryDropsPendingStateFromReplacedSession(t *test
 		ID: "issue:3:524:529",
 		Launch: &state.LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
-			PendingReportedState: "idle", PendingAgentSession: &pending,
+			PendingReportedState: "idle", PendingReportedSeq: 4, PendingAgentSession: &pending,
 		},
 	}
 
 	applyManagedLaunchTelemetry(&pane, intent)
 
-	if pane.ReportedState != "running" || pane.StateRefinement {
+	if pane.ReportedState != "running" || pane.ReportedStateSeq != 0 || pane.StateRefinement {
 		t.Fatalf("replaced-session telemetry = (%q, %t), want synthetic running", pane.ReportedState, pane.StateRefinement)
 	}
 }

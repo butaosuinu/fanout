@@ -9,6 +9,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -322,6 +323,23 @@ func TestRunMsgNudgeHerdrAllowsUnreportedAgentSession(t *testing.T) {
 	}
 }
 
+func TestRunMsgNudgeHerdrResolvesRowKeyCollisionByWorktree(t *testing.T) {
+	store, runtime := managedNudgeFixture("idle", true)
+	foreign := store.Panes[0]
+	foreign.Parent = "69"
+	foreign.WorktreePath = "/repo/.fanout/worktrees/other"
+	foreign.PaneID = "w2:p1"
+	foreign.TerminalID = "term-other"
+	store.Panes = append(store.Panes, foreign)
+
+	deps := managedNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudgeCalls != 1 || errb.Len() != 0 {
+		t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+	}
+}
+
 func TestRunMsgNudgeHerdrRejectsInvalidLaunchGenerationBeforeRuntimeIO(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -378,6 +396,7 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 		{name: "process changed", mutateProc: func(p *backend.PaneProcessInfo) { p.ForegroundProcesses[0].Argv = []string{"other"} }, want: "process identity"},
 		{name: "workspace ownership changed", mutateRow: func(p *state.Pane) { p.WorkspaceLabel = "fanout-worktree-replaced" }, want: "launch binding changed"},
 		{name: "emitter generation changed", mutateRow: func(p *state.Pane) { p.EmitterNonce = strings.Repeat("c", 32) }, want: "launch binding changed"},
+		{name: "emitter stable identity duplicated", mutateStore: appendDuplicateNudgeStableIdentity, want: "launch binding changed"},
 		{name: "recipient duplicated", mutateStore: appendDuplicateNudgeRecipient, want: "launch binding changed"},
 		{name: "latest state blocked", mutateRow: func(p *state.Pane) { p.ReportedState = "blocked" }, want: "not nudgeable"},
 		{name: "state lock failed", lockErr: errors.New("lock failed"), want: "lock failed"},
@@ -471,6 +490,30 @@ func TestRunMsgNudgeHerdrDoesNotReadRuntimeAfterFinalStateGate(t *testing.T) {
 	}
 }
 
+func TestRunMsgNudgeHerdrRejectsUnsequencedClaudeGeneration(t *testing.T) {
+	store, runtime := managedNudgeFixture("working", true)
+	store.Panes[0].LaunchArgs = []string{"--permission-mode", "auto", "prompt"}
+	deps := managedNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.liveCalls != 0 || runtime.nudgeCalls != 0 ||
+		!strings.Contains(errb.String(), "launch binding changed") {
+		t.Fatalf("code=%d live=%d nudges=%d stderr=%q", code, runtime.liveCalls, runtime.nudgeCalls, errb.String())
+	}
+}
+
+func TestRunMsgNudgeHerdrRejectsMissingClaudeSequenceWatermark(t *testing.T) {
+	store, runtime := managedNudgeFixture("working", true)
+	store.Panes[0].ReportedStateSeq = 0
+	deps := managedNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.liveCalls != 0 || runtime.nudgeCalls != 0 ||
+		!strings.Contains(errb.String(), "launch binding changed") {
+		t.Fatalf("code=%d live=%d nudges=%d stderr=%q", code, runtime.liveCalls, runtime.nudgeCalls, errb.String())
+	}
+}
+
 func TestRunMsgNudgeHerdrAcceptsExactCodexPlanProcess(t *testing.T) {
 	store, runtime := codexPlanNudgeFixture()
 	deps := managedNudgeDeps(store, store, runtime)
@@ -519,6 +562,14 @@ func appendDuplicateNudgeRecipient(store *state.Store) {
 	store.Panes = append(store.Panes, duplicate)
 }
 
+func appendDuplicateNudgeStableIdentity(store *state.Store) {
+	duplicate := store.Panes[0]
+	duplicate.Parent = "69"
+	duplicate.PaneID = "w2:p1"
+	duplicate.TerminalID = "term-duplicate"
+	store.Panes = append(store.Panes, duplicate)
+}
+
 func TestUniqueNudgeRecipientRejectsDuplicatePlanTask(t *testing.T) {
 	store := state.Store{SchemaVersion: 1, Panes: []state.Pane{
 		{Parent: "plan:demo", TaskID: "task-a", PaneID: "w1:p1"},
@@ -542,7 +593,8 @@ func TestRunMsgNudgeHerdrDoesNotRetryAnAmbiguousPromptFailure(t *testing.T) {
 
 func managedNudgeFixture(reportedState string, refined bool) (state.Store, *fakeNudgeRuntime) {
 	worktree := "/repo/.fanout/worktrees/child"
-	args := []string{"--permission-mode", "auto", "prompt"}
+	settings := `{"command":"` + telemetry.SequenceCommand + `"}`
+	args := []string{"--settings", settings, "--permission-mode", "auto", "prompt"}
 	repoKey := "/repo/.git"
 	rowKey := "issue:68:71"
 	launchNonce := strings.Repeat("a", 32)
@@ -557,6 +609,9 @@ func managedNudgeFixture(reportedState string, refined bool) (state.Store, *fake
 		EmitterRowKey: rowKey, LaunchNonce: launchNonce,
 		EmitterNonce: strings.Repeat("b", 32), LaunchExecutable: "/usr/bin/claude",
 		LaunchArgs: args,
+	}
+	if refined {
+		pane.ReportedStateSeq = 1
 	}
 	live := backend.LivePane{
 		Ref: paneRef(pane), TerminalID: pane.TerminalID, SessionID: pane.SessionID,

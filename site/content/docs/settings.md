@@ -31,7 +31,7 @@ The behavior toggles control briefing instructions and tmux keybindings.
 - `briefingCodeReview`: tells Claude children to run the `/code-review` slash command on their changes before committing.
 - `agentTeamsHint`: tells Claude children that Claude Code Agent Teams is available. It has no effect on non-Claude children.
 - `prVisualization`: asks children to structure the PR body they open and, conditionally, include a Mermaid diagram (see below).
-- `dashboardKeybind`: registers the `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key in tmux.
+- `dashboardKeybind`: registers `F12` for the dashboard in tmux and fanout-owned Herdr sessions. tmux also gets `prefix + D` and the `prefix + M` same-worktree action key.
 - `consoleKeybind`: registers the `F11` / `prefix + T` console-return keys in tmux when the TUI console starts.
 - `runtimeBackend`: the fallback runtime backend (`tmux` or `herdr`) when nothing higher in the resolution order decides — a parent's recorded backend, `--backend`, `FANOUT_BACKEND`, and the runtime context (`HERDR_ENV` / `TMUX`) all take precedence. User config only — repo config ignores the key with a warning. The [herdr backend]({{< relref "/docs/herdr-backend" >}}) uses a repository-owned session for CLI launches.
 
@@ -63,7 +63,7 @@ Notification channels pick where TUI state transitions go.
 | Claude `/code-review` instruction | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
-| Dashboard/action tmux keybindings | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| Dashboard/action keybindings | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | Console-return tmux keybindings | `consoleKeybind` | `FANOUT_CONSOLE_KEYBIND` | n/a | `true` |
 | New session Plan Mode | `newSessionPlanMode` | `FANOUT_NEW_SESSION_PLAN_MODE` | n/a | `true` |
 | Orchestrator Plan Mode | `orchestratorPlanMode` | `FANOUT_ORCHESTRATOR_PLAN_MODE` | n/a | `true` |

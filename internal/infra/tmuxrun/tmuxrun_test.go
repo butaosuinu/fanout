@@ -1919,7 +1919,17 @@ func installClosePaneShim(t *testing.T, killBody string) string {
 	gonePath := filepath.Join(t.TempDir(), "gone")
 	t.Setenv("CLOSE_PANE_KILLED", killedPath)
 	t.Setenv("CLOSE_PANE_GONE", gonePath)
-	script := `case "$1" in
+	// Outside tmux, C-locale clients sanitize TABs unless -u enables UTF-8.
+	script := `utf8=0
+if [ "$1" = "-u" ]; then
+	utf8=1
+	shift
+fi
+separator=$(printf '\t')
+if [ "${LC_ALL:-}" = C ] && [ "$utf8" = 0 ]; then
+	separator=_
+fi
+case "$1" in
 list-panes)
 	if [ -n "${CLOSE_PANE_LC_ALL_PATH:-}" ]; then
 		printf '%s' "${LC_ALL:-}" > "$CLOSE_PANE_LC_ALL_PATH"
@@ -1938,18 +1948,18 @@ list-panes)
 	fi
 	case "$4" in
 	*pane_current_path*)
-		printf '%%5\t%s\n' "$CLOSE_PANE_CURRENT_PATH"
+		printf '%%5%s%s\n' "$separator" "$CLOSE_PANE_CURRENT_PATH"
 		if [ "${CLOSE_PANE_DUPLICATE_PATH:-}" = 1 ]; then
-			printf '%%5\t%s\n' "$CLOSE_PANE_CURRENT_PATH"
+			printf '%%5%s%s\n' "$separator" "$CLOSE_PANE_CURRENT_PATH"
 		fi
 		;;
-	*pane_title*) printf '%%5\ttest pane\n' ;;
-	*fanout_agent_state*) printf '%%5\trunning\n' ;;
-	*fanout_shell_key*) printf '%%5\t%s\n' "$CLOSE_PANE_SHELL_KEY" ;;
-	*fanout_project_root*) printf '%%5\t/repo\n' ;;
-	*fanout_worktree_path*) printf '%%5\t%s\n' "$CLOSE_PANE_WORKTREE_PATH" ;;
-	*fanout_role*) printf '%%5\tagent\n' ;;
-	*session_id*) printf '%%5\t$1\n' ;;
+	*pane_title*) printf '%%5%stest pane\n' "$separator" ;;
+	*fanout_agent_state*) printf '%%5%srunning\n' "$separator" ;;
+	*fanout_shell_key*) printf '%%5%s%s\n' "$separator" "$CLOSE_PANE_SHELL_KEY" ;;
+	*fanout_project_root*) printf '%%5%s/repo\n' "$separator" ;;
+	*fanout_worktree_path*) printf '%%5%s%s\n' "$separator" "$CLOSE_PANE_WORKTREE_PATH" ;;
+	*fanout_role*) printf '%%5%sagent\n' "$separator" ;;
+	*session_id*) printf '%%5%s$1\n' "$separator" ;;
 	esac
 	;;
 display-message)

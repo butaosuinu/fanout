@@ -145,9 +145,17 @@ msgstr "(no plan found — none proposed yet, or it has scrolled out of view)"
 msgid "このダッシュボードは merge を実行できません"
 msgstr "This dashboard cannot run merges"
 
+#: src/features/merge/merge.ts
+msgid "GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)"
+msgstr "Layers of a GitHub-native stack cannot be merged from the dashboard (merge them on GitHub)"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "言語"
 msgstr "Language"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "#{pr} がこの branch を base にしているため削除できません"
+msgstr "Cannot delete: #{pr} uses this branch as its base"
 
 #: src/app/App.tsx
 msgid "アクティブなセッションがありません"
@@ -156,6 +164,10 @@ msgstr "No active sessions"
 #: src/features/merge/DeleteBranchButton.tsx
 msgid "ブランチを削除"
 msgstr "Delete branch"
+
+#: src/features/sessions/badges.tsx
+msgid "base 連鎖(推定)· {size} 層中 {position} 層目 → {baseRef}"
+msgstr "Inferred base chain · layer {position} of {size} → {baseRef}"
 
 #: src/features/drawer/Drawer.tsx
 #: src/features/sessions/SessionSection.tsx
@@ -368,6 +380,10 @@ msgstr "The merge timed out. Check its state on GitHub"
 msgid "表示中の差分より PR が進んでいます。再取得してから実行してください"
 msgstr "The pull request has moved past the diff shown here. Reload it before merging"
 
+#: src/features/drawer/StackMap.tsx
+msgid "stack #{number} → {baseRef} · {size} 層"
+msgstr "stack #{number} → {baseRef} · {size} layers"
+
 #: src/features/merge/merge.ts
 msgid "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
 msgstr "The diff shown includes uncommitted changes. Commit and push them first."
@@ -379,6 +395,10 @@ msgstr "GitHub state is unavailable"
 #: src/features/diff/diff.ts
 msgid "バイナリのため patch なし"
 msgstr "no patch — binary"
+
+#: src/features/drawer/StackMap.tsx
+msgid "この行の詳細を開く"
+msgstr "Open this row's details"
 
 #: src/features/merge/DeleteBranchButton.tsx
 msgid "ブランチを削除できませんでした(接続エラー)"
@@ -419,9 +439,17 @@ msgid "レビュー対象が patch に揃っていません — patch は不完�
 msgstr "The patch does not cover everything under review — it is incomplete"
 
 #: src/features/merge/merge.ts
+msgid "下の層 #{pr} が未マージです(下の層からマージしてください)"
+msgstr "Lower layer #{pr} is not merged yet (merge from the bottom up)"
+
+#: src/features/merge/merge.ts
 #: src/features/sessions/badges.tsx
 msgid "base branch と競合しています"
 msgstr "Conflicts with the base branch"
+
+#: src/features/drawer/StackMap.tsx
+msgid "◀ この Session"
+msgstr "◀ this Session"
 
 #: src/features/merge/merge.ts
 msgid "表示中の差分を取得できていません。再取得してから実行してください"
@@ -583,6 +611,10 @@ msgstr "Summary"
 msgid "patch のあるファイルはすべて確認済みです"
 msgstr "Every file with a patch is viewed"
 
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "ブランチを削除 — {reason}"
+msgstr "Delete branch — {reason}"
+
 #: src/features/filter/FilterDropdown.tsx
 msgid "{key} の選択肢を検索"
 msgstr "Search {key} options"
@@ -591,6 +623,14 @@ msgstr "Search {key} options"
 #: src/features/settings/SettingsModal.tsx
 msgid "設定"
 msgstr "Settings"
+
+#: src/features/drawer/StackMap.tsx
+msgid "base 連鎖(推定)→ {baseRef} · {size} 層"
+msgstr "Inferred base chain → {baseRef} · {size} layers"
+
+#: src/features/sessions/badges.tsx
+msgid "stack #{number} · {size} 層中 {position} 層目 → {baseRef}"
+msgstr "stack #{number} · layer {position} of {size} → {baseRef}"
 
 #: src/app/App.tsx
 msgid "差分ビュアーを読み込めませんでした。ダッシュボードを再起動した直後だと、開いたままのページが古いスクリプトを指していることがあります。"

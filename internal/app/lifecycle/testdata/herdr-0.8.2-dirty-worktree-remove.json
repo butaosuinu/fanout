@@ -1,0 +1,1 @@
+{"error":{"code":"dirty_worktree_requires_force","message":"fatal: '/private/tmp/f743env.6EneFi/worktrees/probe' contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}

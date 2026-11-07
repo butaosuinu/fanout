@@ -9,6 +9,30 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.18.0 (2026-10-17)
+
+- herdr backend 選択時は、端末で引数なしの `fanout` を実行すると owned session に直接入れます。
+  cold restart 後も、保存済み launcher の identity を検証できれば console を再表示できます。
+  owned herdr ペインでは `F12` で Web ダッシュボードを開けます。
+  設定と復旧の制限は [herdr backend]({{< relref "/docs/herdr-backend" >}}) を参照。
+- Herdr cleanup は dirty-file 拒否後の checkout を再検査し、ignored file だけが残る場合は削除してから worktree を除去します。
+  checkout を共有する attached agent も、保存済み identity を検証してから閉じます。
+  plan cleanup は、他の repository workspace を閉じずに、その plan 専用の空の coordinator を終了できます。
+  結果が曖昧な mutation は引き続き照合または手動 cleanup が必要です。
+  [herdr backend]({{< relref "/docs/herdr-backend" >}}) を参照。
+- Web ダッシュボードの Session 行と詳細 drawer に stacked PR の関係を表示します。
+  未マージの下位層があれば merge を拒否し、他の open PR の base に使われる branch は削除を拒否します。
+  GitHub-native stack の各層は GitHub 上でマージしてください。
+  [モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
+- Claude hook の状態報告を sequence 順に扱い、Codex Plan Mode と team controller が thread event を購読するようにしました。
+  Codex の `session-retro` skill を同梱し、`post-work-review` / `pr-watch` の指摘をタスクの目的、受入条件、承認済み非目標に照らす規則を更新しました。
+  [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) を参照。
+- tmux の close 操作で、C locale でも identity field の区切りを保持し、記録済みペインを閉じる際の誤った identity mismatch を修正しました。
+- 最低 Go toolchain を 1.26.9 に上げ、`golang.org/x/text` を v0.41.0 に更新しました。
+  Web 依存にも security update を含みます。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.18.0)
+
 ## v0.17.0 (2026-08-21)
 
 - **fanout-owned な herdr ワークフロー。** opt-in の herdr backend は repository-owned session を作成または再利用し、workspace と worktree を用意して issue / Project / plan / watcher を検証済みの非 shell 経路で起動します。

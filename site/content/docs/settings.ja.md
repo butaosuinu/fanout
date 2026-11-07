@@ -38,7 +38,7 @@ repo config から watcher は変更できず、launch posture の 3 キー(`new
 - `briefingCodeReview`: Claude の子に、コミット前に変更へ `/code-review` スラッシュコマンドを走らせるよう指示します。
 - `agentTeamsHint`: Claude の子に Claude Code Agent Teams を使う余地があると伝えます。Claude 以外の子には影響しません。
 - `prVisualization`: 子が開く PR の本文を構造化し、条件付きで Mermaid 図を入れる指示を加えます（後述）。
-- `dashboardKeybind`: tmux に `F12` / `prefix + D` のダッシュボードキーと `prefix + M` の同一 worktree 操作キーを登録します。
+- `dashboardKeybind`: tmux と fanout-owned Herdr session にダッシュボード用の `F12` を登録します。tmux には `prefix + D` と同一 worktree 操作用の `prefix + M` も登録します。
 - `consoleKeybind`: TUI コンソール起動時に、tmux へ `F11` / `prefix + T` のコンソール復帰キーを登録します。
 - `runtimeBackend`: 解決順の上位で決まらなかったときの fallback の runtime backend（`tmux` または `herdr`）です。親に記録済みの backend、`--backend`、`FANOUT_BACKEND`、実行環境のコンテキスト（`HERDR_ENV` / `TMUX`）がいずれも優先されます。user config 専用で、repo config では警告付きで無視されます。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は CLI launch にリポジトリの owned session を使います。
 
@@ -71,7 +71,7 @@ watcher はラベル巡回による自動起動を opt-in で制御します。
 | Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
-| ダッシュボード / 同一 worktree 操作 tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| ダッシュボード / 同一 worktree 操作キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | コンソール復帰 tmux キーバインド | `consoleKeybind` | `FANOUT_CONSOLE_KEYBIND` | n/a | `true` |
 | 新規 Session の Plan Mode | `newSessionPlanMode` | `FANOUT_NEW_SESSION_PLAN_MODE` | n/a | `true` |
 | オーケストレーターの Plan Mode | `orchestratorPlanMode` | `FANOUT_ORCHESTRATOR_PLAN_MODE` | n/a | `true` |

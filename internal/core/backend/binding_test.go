@@ -187,9 +187,10 @@ func TestPaneBindingMatchesLive(t *testing.T) {
 			mutateLive: func(l *LivePane) { l.RepoKey = "/other/.git" },
 		},
 		{
-			name:        "recorded repository identity missing against observed provenance",
+			name:        "row without recorded repository matches its observed checkout",
 			mutateBound: func(b *PaneBinding) { b.RepoKey = "" },
 			mutateLive:  func(l *LivePane) { l.RepoKey = "" },
+			want:        true,
 		},
 		{
 			name:       "observed repository identity missing",
@@ -198,6 +199,13 @@ func TestPaneBindingMatchesLive(t *testing.T) {
 		{
 			name:       "observed project root missing",
 			mutateLive: func(l *LivePane) { l.ProjectRoot = "" },
+		},
+		{
+			name: "recorded repository still requires checkout provenance",
+			mutateLive: func(l *LivePane) {
+				l.RepoKey, l.ProjectRoot, l.WorktreePath = "", "", ""
+				l.CurrentPath = "/repo/.fanout/worktrees/child"
+			},
 		},
 		{
 			// Foreground cwd never authorizes a pane that reports provenance.
@@ -281,6 +289,46 @@ func TestPaneBindingMatchesLive(t *testing.T) {
 			}
 			if got := bound.MatchesLive(live, tt.opts...); got != tt.want {
 				t.Fatalf("MatchesLive(%+v) = %t, want %t", live, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoordinatorBindingMatchesLaterCheckoutProvenance(t *testing.T) {
+	bound := PaneBinding{
+		Row:       PaneRowKey{Parent: "@manual", IssueNum: -2},
+		Ref:       PaneRef{Backend: Herdr, Workspace: "w2", Pane: "w2:p1"},
+		SessionID: "session-a", SocketPath: "/tmp/herdr-a.sock",
+		WorkspaceLabel: "fanout-coordinator-nonce", TerminalID: "terminal-2",
+		Shell: true, WorktreePath: "/repo",
+	}
+	live := LivePane{
+		Ref: bound.Ref, SessionID: bound.SessionID, SocketPath: bound.SocketPath,
+		WorkspaceLabel: bound.WorkspaceLabel, TerminalID: bound.TerminalID,
+		CurrentPath: "/repo",
+	}
+	if !bound.MatchesLive(live) {
+		t.Fatal("coordinator must match before checkout provenance appears")
+	}
+	live.RepoKey, live.ProjectRoot = "/repo/.git", "/repo"
+	for _, tt := range []struct {
+		name         string
+		checkoutPath string
+		want         bool
+	}{
+		{name: "same checkout", checkoutPath: "/repo", want: true},
+		{name: "cleaned checkout", checkoutPath: "/repo/subdir/..", want: true},
+		{name: "other checkout overrides matching cwd", checkoutPath: "/other"},
+		{name: "checkout subdirectory", checkoutPath: "/repo/subdir"},
+		{name: "missing checkout falls back to saved cwd", want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			observed := live
+			observed.WorktreePath = tt.checkoutPath
+			if got := bound.MatchesLive(observed); got != tt.want {
+				t.Fatalf("MatchesLive() = %t, want %t (route=%t agent=%t checkout=%t)",
+					got, tt.want, bound.routeMatchesLive(observed),
+					bound.agentMatchesLive(observed, matchConfig{}), bound.checkoutMatchesLive(observed))
 			}
 		})
 	}

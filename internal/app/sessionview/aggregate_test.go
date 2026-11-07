@@ -1020,11 +1020,12 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			include: true,
 		},
 		{
-			name: "recorded repository identity missing",
+			name: "row without recorded repository matches its observed checkout",
 			mutateRow: func(p *state.Pane) {
 				p.RepoKey = ""
 			},
-			include: true,
+			include:   true,
+			wantAlive: true,
 		},
 		{
 			name: "observed repository identity missing",
@@ -1110,6 +1111,29 @@ func TestHerdrPaneMatchesOwnedShellWithoutAgentIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildHerdrCoordinatorWithLaterCheckoutProvenance(t *testing.T) {
+	// managedCoordinatorPane records the repo-root shell without checkout or agent identity.
+	row := state.Pane{
+		Parent: "@manual", RuntimeParent: "plan:example", IssueNum: -2,
+		Kind: state.PaneKindShell, Slug: "herdr-coordinator-2",
+		Backend: backend.Herdr, PaneID: "w2:p1", WorkspaceID: "w2",
+		WorkspaceLabel: "fanout-coordinator-nonce", TerminalID: "terminal-2",
+		SessionID: "session-a", SocketPath: "/tmp/herdr-a.sock",
+		DisplayName: "Herdr coordinator: plan:example", WorktreePath: "/repo",
+	}
+	// herdrrun projects workspace checkout metadata when it appears in a later snapshot.
+	live := backend.LivePane{
+		Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: "w2", Pane: "w2:p1"},
+		WorkspaceLabel: row.WorkspaceLabel, TerminalID: row.TerminalID,
+		SessionID: row.SessionID, SocketPath: row.SocketPath,
+		CurrentPath: "/repo", WorktreePath: "/repo", ProjectRoot: "/repo", RepoKey: "/repo/.git",
+	}
+	got := buildWithLivePanes([]state.Pane{row}, []backend.LivePane{live}, nil).Sessions[0].Panes[0]
+	if !got.Alive || got.RuntimeState != "live" {
+		t.Fatalf("coordinator alive=%t runtime=%q, want true/live", got.Alive, got.RuntimeState)
+	}
+}
+
 func TestBuildHerdrWithoutWorktreeProvenanceUsesSavedCWDExactly(t *testing.T) {
 	row := herdrPane("1", 2, "workspace-a:p1")
 	row.WorktreePath = "/repo/saved-cwd"
@@ -1128,7 +1152,7 @@ func TestBuildHerdrWithoutWorktreeProvenanceUsesSavedCWDExactly(t *testing.T) {
 		{name: "matching saved cwd", currentCWD: row.WorktreePath, wantAlive: true},
 		{name: "saved cwd subdirectory is not exact", currentCWD: row.WorktreePath + "/subdir"},
 		{name: "different saved cwd", currentCWD: "/repo/other"},
-		{name: "worktree provenance appeared", currentCWD: row.WorktreePath, currentProvenance: true},
+		{name: "worktree provenance appeared", currentCWD: row.WorktreePath, currentProvenance: true, wantAlive: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

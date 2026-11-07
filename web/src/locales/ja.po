@@ -145,9 +145,17 @@ msgstr "(plan が見つかりません — まだ提案されていないか、�
 msgid "このダッシュボードは merge を実行できません"
 msgstr "このダッシュボードは merge を実行できません"
 
+#: src/features/merge/merge.ts
+msgid "GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)"
+msgstr "GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "言語"
 msgstr "言語"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "#{pr} がこの branch を base にしているため削除できません"
+msgstr "#{pr} がこの branch を base にしているため削除できません"
 
 #: src/app/App.tsx
 msgid "アクティブなセッションがありません"
@@ -156,6 +164,10 @@ msgstr "アクティブなセッションがありません"
 #: src/features/merge/DeleteBranchButton.tsx
 msgid "ブランチを削除"
 msgstr "ブランチを削除"
+
+#: src/features/sessions/badges.tsx
+msgid "base 連鎖(推定)· {size} 層中 {position} 層目 → {baseRef}"
+msgstr "base 連鎖(推定)· {size} 層中 {position} 層目 → {baseRef}"
 
 #: src/features/drawer/Drawer.tsx
 #: src/features/sessions/SessionSection.tsx
@@ -368,6 +380,10 @@ msgstr "マージがタイムアウトしました。GitHub 側の状態を確�
 msgid "表示中の差分より PR が進んでいます。再取得してから実行してください"
 msgstr "表示中の差分より PR が進んでいます。再取得してから実行してください"
 
+#: src/features/drawer/StackMap.tsx
+msgid "stack #{number} → {baseRef} · {size} 層"
+msgstr "stack #{number} → {baseRef} · {size} 層"
+
 #: src/features/merge/merge.ts
 msgid "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
 msgstr "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
@@ -379,6 +395,10 @@ msgstr "GitHub の情報を取得できていません"
 #: src/features/diff/diff.ts
 msgid "バイナリのため patch なし"
 msgstr "バイナリのため patch なし"
+
+#: src/features/drawer/StackMap.tsx
+msgid "この行の詳細を開く"
+msgstr "この行の詳細を開く"
 
 #: src/features/merge/DeleteBranchButton.tsx
 msgid "ブランチを削除できませんでした(接続エラー)"
@@ -419,9 +439,17 @@ msgid "レビュー対象が patch に揃っていません — patch は不完�
 msgstr "レビュー対象が patch に揃っていません — patch は不完全です"
 
 #: src/features/merge/merge.ts
+msgid "下の層 #{pr} が未マージです(下の層からマージしてください)"
+msgstr "下の層 #{pr} が未マージです(下の層からマージしてください)"
+
+#: src/features/merge/merge.ts
 #: src/features/sessions/badges.tsx
 msgid "base branch と競合しています"
 msgstr "base branch と競合しています"
+
+#: src/features/drawer/StackMap.tsx
+msgid "◀ この Session"
+msgstr "◀ この Session"
 
 #: src/features/merge/merge.ts
 msgid "表示中の差分を取得できていません。再取得してから実行してください"
@@ -583,6 +611,10 @@ msgstr "集計"
 msgid "patch のあるファイルはすべて確認済みです"
 msgstr "patch のあるファイルはすべて確認済みです"
 
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "ブランチを削除 — {reason}"
+msgstr "ブランチを削除 — {reason}"
+
 #: src/features/filter/FilterDropdown.tsx
 msgid "{key} の選択肢を検索"
 msgstr "{key} の選択肢を検索"
@@ -591,6 +623,14 @@ msgstr "{key} の選択肢を検索"
 #: src/features/settings/SettingsModal.tsx
 msgid "設定"
 msgstr "設定"
+
+#: src/features/drawer/StackMap.tsx
+msgid "base 連鎖(推定)→ {baseRef} · {size} 層"
+msgstr "base 連鎖(推定)→ {baseRef} · {size} 層"
+
+#: src/features/sessions/badges.tsx
+msgid "stack #{number} · {size} 層中 {position} 層目 → {baseRef}"
+msgstr "stack #{number} · {size} 層中 {position} 層目 → {baseRef}"
 
 #: src/app/App.tsx
 msgid "差分ビュアーを読み込めませんでした。ダッシュボードを再起動した直後だと、開いたままのページが古いスクリプトを指していることがあります。"

@@ -45,9 +45,9 @@ English and 日本語.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a localhost dashboard with live updates and a merge
-  button on every Session that has a pull request; pop it from any pane with
-  `F12` or `prefix + D`. Use `prefix + M` for same-worktree actions from a
-  recorded pane.
+  button on every Session that has a pull request. In tmux, open it from any
+  pane with `F12` or `prefix + D`; a fanout-owned Herdr pane uses `F12`.
+  Use `prefix + M` in tmux for same-worktree actions from a recorded pane.
 - **Status & reporting** — `--status` JSON / table with PR review and CI state,
   plus an optional dashboard comment on the parent issue.
 - **Lifecycle hooks** — user-configured shell commands around worktree, pane,
@@ -180,6 +180,7 @@ it discovers labeled issues across the repository and starts one-shot sessions.
 | `fanout` | Start the persistent TUI console (Session jump, numeric jump 1-9, focus, zoom, peek, compact switcher below 80 columns (`v`), terminal, prompt / issue session launch, settings popup (`s`), same-worktree attach, restore, lifecycle keys) |
 | `fanout 123 --status` | Pane, PR review, and CI state as JSON or a table |
 | `fanout dashboard --web` | Serve the web dashboard on localhost (read-only apart from merging a PR and deleting its remote branch) |
+| `fanout dashboard --list` | List registered live dashboards across repositories without access tokens |
 | `fanout 123 --merge 4` | Fast-forward merge a child branch (`--close` / `--cleanup` fold panes away) |
 
 Fan-out runs need a child agent — pass `--agent claude` / `--agent codex` /
@@ -200,7 +201,7 @@ context. See the
 
 ## Development requirements
 
-Building from a checkout needs Go 1.26.6+, Node.js 24+, and pnpm 11+ (the
+Building from a checkout needs Go 1.26.10+, Node.js 24+, and pnpm 11+ (the
 curl install ships a prebuilt binary and needs none of these).
 
 ## Development

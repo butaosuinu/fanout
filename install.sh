@@ -158,7 +158,7 @@ remove_integrations() {
     "$claude_dir/skills/pr-watch" "$claude_dir/skills/session-retro"
   rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues" \
     "$codex_dir/skills/fanout-plan" "$codex_dir/skills/post-work-review" \
-    "$codex_dir/skills/pr-watch"
+    "$codex_dir/skills/pr-watch" "$codex_dir/skills/session-retro"
   remove_retired_codex_review_files
 }
 

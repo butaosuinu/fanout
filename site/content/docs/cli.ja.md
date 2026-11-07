@@ -199,6 +199,9 @@ fanout plan launch-plan --cleanup
 `--merge <task-id>` は記録済み task branch を project checkout へ fast-forward
 します。`--close <task-id>` は記録済み task worktree、ペイン、state row を削除します。
 `--cleanup` は head branch に merge 済み PR がある記録済み plan task ペインを閉じます。
+herdr では、専用 coordinator を持つ plan の task 行が 0 件になると、その coordinator workspace も閉じ、state 行と intent を退役します。
+GitHub issue と共有する coordinator は保持します。
+同じ workspace に別 pane が残る場合は manual cleanup が必要です。
 これらの mode は `FANOUT_STATE_PATH` を尊重します。
 
 agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Claude Code は
@@ -326,18 +329,39 @@ Blocking hook が失敗すると操作を止め、hook の出力を表示しま�
 
 ```text
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
+fanout dashboard --list
 ```
 
 localhost Web ダッシュボードを起動します。`127.0.0.1` にのみバインドし、トークンでゲートされます。fanout の Session（親ごとにまとめた記録済みペイン）を、ペインの生存、issue 状態、PR マージ状態とともにライブ表示します。読み取りは GET 専用で、変更できるのはマージボタンによる GitHub 上の PR マージだけです。作業ツリー・ローカル branch・worktree は一切変わりません。
 
 | フラグ | 引数 | 説明 |
 |---|---|---|
+| `--list` | — | 登録済みの稼働中ダッシュボードを repo 横断で列挙する。PID、token なしの URL、引用符付きの project root を表示する。repo 外でも実行でき、サーバー用オプションとは併用不可。 |
 | `--port` | `N` | バインドする port。既定: `0`（OS 割り当ての ephemeral port）。確定した URL が表示される。 |
 | `--open` | — | 既定ブラウザで URL を開く。既に起動中のサーバ（`.fanout/dashboard.json` に記録）があればそれを再利用し、二重起動しない。 |
 | `--no-token` | — | `/api/*` をゲートする起動毎のランダムトークンを外す。単一ユーザ端末向け。 |
-| `--no-keybind` | — | ダッシュボード起動時の tmux `F12` / `prefix + D` / `prefix + M` キーバインド登録をスキップする。 |
+| `--no-keybind` | — | ダッシュボード起動時の runtime dashboard shortcut 登録をスキップする。既存の keybind は変更しない。 |
 
 全フラグは `fanout dashboard --help` を参照してください。
+
+新しく起動したサーバーは `$XDG_CONFIG_HOME/fanout/dashboards/` に登録します。
+`XDG_CONFIG_HOME` が未設定なら `~/.config/fanout/dashboards/` を使います。
+設定ディレクトリには絶対パスが必要です。起動ごとにランダムな名前の `.json` ファイルを
+`atomicfs` 経由で mode `0600` で保存し、graceful shutdown でそのファイルだけを削除します。
+記録は次の4フィールドです。
+
+```json
+{"projectRoot":"/absolute/repo","url":"http://127.0.0.1:8787/","pid":12345,"startedAt":"2026-10-17T00:00:00Z"}
+```
+
+`projectRoot` は repo の識別に使い、`url` にアクセストークンは含めません。
+`pid` と RFC 3339 の `startedAt` は起動情報です。この所在情報だけではプロセス操作を
+許可しません。#313 で予定する永続 repo レジストリとは別のディレクトリです。
+
+列挙時は PID と loopback の `/healthz` 応答を確認し、redirect は追従しません。
+死んだ記録、不正な記録、通常ファイル以外は表示せず、stale ファイルの削除もしません。
+登録に失敗した場合は警告を出し、ダッシュボードは稼働を続けます。
+レジストリ対応前に起動したサーバーを一覧に載せるには、停止して起動し直してください。
 
 ### `fanout focus-console`
 
@@ -430,7 +454,7 @@ fanout check-update
 | `FANOUT_BRIEFING_CODE_REVIEW` | Claude `/code-review` 指示（`briefingCodeReview`）の環境変数レイヤ。 |
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
-| `FANOUT_DASHBOARD_KEYBIND` | tmux ダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
+| `FANOUT_DASHBOARD_KEYBIND` | runtime のダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
 | `FANOUT_CONSOLE_KEYBIND` | tmux コンソール復帰キーバインド（`consoleKeybind`）の環境変数レイヤ。 |
 | `FANOUT_NEW_SESSION_PLAN_MODE` | 新規 Session の launch posture（`newSessionPlanMode`）の環境変数レイヤ。 |
 | `FANOUT_ORCHESTRATOR_PLAN_MODE` | オーケストレーターの launch posture（`orchestratorPlanMode`）の環境変数レイヤ。 |

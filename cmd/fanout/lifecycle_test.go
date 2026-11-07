@@ -1476,6 +1476,7 @@ printf '\n' >> "$TMUX_LOG"
 const lifecycleStatefulTmuxScript = `#!/bin/sh
 printf '%s ' "$@" >> "$TMUX_LOG"
 printf '\n' >> "$TMUX_LOG"
+if [ "$1" = "-u" ]; then shift; fi
 case "$1 $2 $3" in
 "list-panes -a -F")
 	case "$4" in
@@ -1582,6 +1583,7 @@ func installLifecycleLivePaneTmuxScript(t *testing.T, paneID, path, title, shell
 	logPath := installLifecycleScript(t, "tmux", `#!/bin/sh
 printf '%s ' "$@" >> "$TMUX_LOG"
 printf '\n' >> "$TMUX_LOG"
+if [ "$1" = "-u" ]; then shift; fi
 case "$1 $2 $3" in
 "list-panes -a -F")
 	if [ ! -s "$TMUX_LIVE_ACTIVE_FILE" ]; then

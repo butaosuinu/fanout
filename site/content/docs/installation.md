@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # Custom destination or pinned release tag
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.17.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.18.0 sh
 ```
 
 `install.sh` auto-detects your OS/arch, then fetches and installs the `fanout` binary and the Claude/Codex integration files from the latest Release (or the tag given via `FANOUT_VERSION`).
@@ -46,7 +46,7 @@ Each destination has an environment-variable override for the install command: `
 - `$BIN_DIR/fanout` — the binary
 - `$CLAUDE_DIR/commands/` — the `fanout`, `pr-watch`, and `session-retro` slash commands
 - `$CLAUDE_DIR/skills/` — the `fanout`, `fanout-issues`, `fanout-plan`, `post-work-review`, `pr-watch`, and `session-retro` skills
-- `$CODEX_DIR/skills/` — the same skills minus `session-retro`; `post-work-review` bundles its marker helper inside the skill
+- `$CODEX_DIR/skills/` — the same six skills; `post-work-review` bundles its marker helper inside the skill
 
 Install and update overwrite all of these.
 
@@ -94,7 +94,7 @@ If the retired driver remains under `CODEX_DIR` or the effective `CODEX_HOME`,
 installer to migrate it.
 Review a gate-changing branch from a trusted checkout or by a human.
 
-Building it needs a Go toolchain (Go 1.26.6+) plus Node.js 24+ and pnpm 11+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
+Building it needs a Go toolchain (Go 1.26.10+) plus Node.js 24+ and pnpm 11+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
 
 ## Keeping it updated
 

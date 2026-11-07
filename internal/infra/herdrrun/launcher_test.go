@@ -25,6 +25,7 @@ func TestWorkloadEnvironmentRemovesControlPlaneAndForcesBackend(t *testing.T) {
 		"FANOUT_HERDR_CONTROL_PATH=/foreign", "TMUX=/tmp/tmux", "TMUX_PANE=%1",
 		"TMUX_TMPDIR=/tmp", "FANOUT_STATE_PATH=/foreign/state",
 		"FANOUT_BACKEND=tmux", "FANOUT_BIN=/foreign/fanout",
+		dashboardRelayTokenEnv + "=secret",
 		"FANOUT_EMITTER_NONCE=foreign", "FANOUT_EMITTER_STATE_PATH=/foreign/state",
 		"FANOUT_CONSOLE_SHELL=/bin/zsh", // console-pane inheritance; the console records its own copy
 	}
@@ -47,9 +48,8 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
-// The owned socket reaches a workload only where an installed Herdr agent
-// integration can use it to report the provider session; every other launch
-// keeps the capsule environment untouched.
+// Claude keeps the existing integration route. Codex receives only its
+// launch-scoped relay, while every other launch keeps the capsule untouched.
 func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 	request := paneLauncherRequest{
 		session: "owned-session", socketPath: "/owned/herdr.sock",
@@ -63,10 +63,14 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 	integrationRoute := []string{
 		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/owned/herdr.sock", "HERDR_PANE_ID=w1:p1",
 	}
+	relayRoute := []string{
+		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/runtime/relay.sock", "HERDR_PANE_ID=w1:p1",
+	}
 	tests := []struct {
-		name   string
-		intent state.LaunchIntent
-		want   []string
+		name        string
+		intent      state.LaunchIntent
+		relaySocket string
+		want        []string
 	}{
 		{
 			name:   "shell pane carries the whole owned route",
@@ -81,32 +85,35 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 			want: integrationRoute,
 		},
 		{
-			name: "direct codex carries the integration route only",
+			name: "direct codex carries the relay route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentWorktree, Launch: &state.LaunchCapsule{Agent: "codex"},
 			},
-			want: integrationRoute,
+			relaySocket: "/runtime/relay.sock",
+			want:        relayRoute,
 		},
 		{
-			name: "resumed codex carries the integration route only",
+			name: "resumed codex carries the relay route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentResume, Launch: &state.LaunchCapsule{Agent: "codex"},
 			},
-			want: integrationRoute,
+			relaySocket: "/runtime/relay.sock",
+			want:        relayRoute,
 		},
 		{
-			// An attached agent runs in the coordinator workspace, which the
-			// grant has never covered for any provider.
-			name: "attached claude carries nothing",
+			name: "attached claude carries the integration route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "claude"},
 			},
+			want: integrationRoute,
 		},
 		{
-			name: "attached codex carries nothing",
+			name: "attached codex carries the relay route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "codex"},
 			},
+			relaySocket: "/runtime/relay.sock",
+			want:        relayRoute,
 		},
 		{
 			// The Plan Mode and team controllers drive codex through fanout
@@ -158,22 +165,38 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			want := append(append([]string(nil), base...), tt.want...)
-			got := workloadExecEnvironment(request, tt.intent, append([]string(nil), base...))
+			got := workloadExecEnvironment(
+				request, tt.intent, append([]string(nil), base...), tt.relaySocket,
+			)
 			if !slices.Equal(got, want) {
 				t.Fatalf(
 					"workloadExecEnvironment(kind=%q, agent=%q) = %q, want %q",
 					tt.intent.Kind, tt.intent.Launch.Agent, got, want,
 				)
 			}
+			if tt.intent.Launch.Agent == "codex" && slices.Contains(got, socketEnv+"="+request.socketPath) {
+				t.Fatalf("Codex environment exposes owned socket: %q", got)
+			}
 		})
+	}
+}
+
+func TestDirectAgentIntegrationLaunchRequiresProviderWorkload(t *testing.T) {
+	if directAgentIntegrationLaunch(nil) {
+		t.Fatal("idle coordinator scaffold received the agent integration grant")
+	}
+	if directAgentIntegrationLaunch(&state.LaunchCapsule{}) {
+		t.Fatal("console or shell workload received the agent integration grant")
 	}
 }
 
 func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) {
 	intent := state.LaunchIntent{
 		ID: "coordinator:manual:/repo:530", Session: "owned-session", SocketPath: "/owned/herdr.sock",
+		WorktreePath: "/repo/worktree",
 		Resource: state.RuntimeResource{
-			WorkspaceID: "w1", PaneID: "w1:p1", TerminalID: "terminal-1",
+			WorkspaceID: "w1", Label: "owned-label-1",
+			PaneID: "w1:p1", TerminalID: "terminal-1",
 		},
 		Launch: &state.LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
@@ -184,18 +207,22 @@ func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) 
 		telemetry.RowKeyEnv + "=", telemetry.LaunchNonceEnv + "=",
 		telemetry.EmitterNonceEnv + "=", telemetry.BackendEnv + "=",
 		telemetry.SessionEnv + "=", telemetry.SocketPathEnv + "=",
-		telemetry.WorkspaceIDEnv + "=", telemetry.PaneIDEnv + "=",
+		telemetry.WorkspaceIDEnv + "=", telemetry.WorkspaceLabelEnv + "=",
+		telemetry.WorktreePathEnv + "=", telemetry.PaneIDEnv + "=",
 		telemetry.TerminalIDEnv + "=", telemetry.AgentEnv + "=",
 		telemetry.AgentIDEnv + "=", "PATH=/bin",
 	}
-	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment)
+	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment, "")
 	want := map[string]string{
 		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: intent.Launch.Nonce,
 		telemetry.EmitterNonceEnv: intent.Launch.EmitterNonce, telemetry.BackendEnv: "herdr",
 		telemetry.SessionEnv: intent.Session, telemetry.SocketPathEnv: intent.SocketPath,
-		telemetry.WorkspaceIDEnv: intent.Resource.WorkspaceID,
-		telemetry.PaneIDEnv:      intent.Resource.PaneID, telemetry.TerminalIDEnv: intent.Resource.TerminalID,
-		telemetry.AgentEnv: intent.Launch.Agent, telemetry.AgentIDEnv: intent.Launch.AgentName,
+		telemetry.WorkspaceIDEnv:    intent.Resource.WorkspaceID,
+		telemetry.WorkspaceLabelEnv: intent.Resource.Label,
+		telemetry.WorktreePathEnv:   intent.WorktreePath,
+		telemetry.PaneIDEnv:         intent.Resource.PaneID,
+		telemetry.TerminalIDEnv:     intent.Resource.TerminalID,
+		telemetry.AgentEnv:          intent.Launch.Agent, telemetry.AgentIDEnv: intent.Launch.AgentName,
 	}
 	for _, entry := range got {
 		name, value, _ := strings.Cut(entry, "=")

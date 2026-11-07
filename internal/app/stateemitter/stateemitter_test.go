@@ -1,6 +1,7 @@
 package stateemitter
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
@@ -68,6 +70,266 @@ func TestEmitUpdatesOnlyFinalRowTelemetry(t *testing.T) {
 	}
 	if observer.targets[0].GitCommonDir != wantGitCommonDir {
 		t.Fatalf("observer Git common dir = %q, want %q", observer.targets[0].GitCommonDir, wantGitCommonDir)
+	}
+}
+
+func TestEmitResolvesSyntheticRowCollisionByStableIdentity(t *testing.T) {
+	repo := newEmitterRepo(t)
+	target, signal, observer := finalEmitterFixture(t, repo)
+	foreign := target
+	foreign.Parent, foreign.IssueNum = "525", -1
+	foreign.WorkspaceID, foreign.WorkspaceLabel = "workspace-2", "owned-label-2"
+	foreign.PaneID, foreign.TerminalID = "workspace-2:pane-1", "terminal-2"
+	foreign.ReportedState = string(backend.AgentBlocked)
+	foreign.ReportedStateSeq, foreign.StateRefinement = 2, true
+	saveEmitterPanes(t, repo, foreign, target)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTarget, found := store.Find(target.Parent, target.IssueNum)
+	if !found || gotTarget.ReportedState != string(backend.AgentWorking) {
+		t.Fatalf("target telemetry = (%+v, %t), want working", gotTarget, found)
+	}
+	gotForeign, found := store.Find(foreign.Parent, foreign.IssueNum)
+	if !found || gotForeign.ReportedState != string(backend.AgentBlocked) ||
+		gotForeign.ReportedStateSeq != 2 {
+		t.Fatalf("foreign telemetry = (%+v, %t), want unchanged blocked", gotForeign, found)
+	}
+}
+
+func TestEmitResolvesPinnedLegacyLauncherThroughStableIdentity(t *testing.T) {
+	repo := newEmitterRepo(t)
+	target, signal, observer := finalEmitterFixture(t, repo)
+	foreign := target
+	foreign.Parent, foreign.IssueNum = "525", -1
+	foreign.WorktreePath = filepath.Join(repo, ".fanout", "worktrees", "foreign")
+	foreign.WorkspaceID, foreign.WorkspaceLabel = "workspace-2", "owned-label-2"
+	foreign.PaneID, foreign.TerminalID = "workspace-2:pane-1", "terminal-2"
+	foreign.ReportedState = string(backend.AgentBlocked)
+	foreign.ReportedStateSeq, foreign.StateRefinement = 2, true
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterPanes(t, repo, foreign, target)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTarget, found := store.Find(target.Parent, target.IssueNum)
+	if !found || gotTarget.ReportedState != string(backend.AgentWorking) {
+		t.Fatalf("target telemetry = (%+v, %t), want working", gotTarget, found)
+	}
+	gotForeign, found := store.Find(foreign.Parent, foreign.IssueNum)
+	if !found || gotForeign.ReportedState != string(backend.AgentBlocked) {
+		t.Fatalf("foreign telemetry = (%+v, %t), want unchanged blocked", gotForeign, found)
+	}
+}
+
+func TestEmitRejectsPinnedLegacyLauncherWithAmbiguousStableIdentity(t *testing.T) {
+	repo := newEmitterRepo(t)
+	target, signal, observer := finalEmitterFixture(t, repo)
+	duplicate := target
+	duplicate.Parent, duplicate.IssueNum = "525", -1
+	duplicate.WorkspaceID, duplicate.PaneID = "workspace-2", "workspace-2:pane-1"
+	duplicate.TerminalID = "terminal-2"
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterPanes(t, repo, target, duplicate)
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted ambiguous persisted stable identity from a legacy launcher")
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pane := range store.Panes {
+		if pane.ReportedState != string(backend.AgentRunning) || pane.StateRefinement {
+			t.Fatalf("ambiguous legacy signal changed row telemetry: %+v", pane)
+		}
+	}
+}
+
+func TestEmitRejectsAmbiguousStableRowIdentityWithoutMutation(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	duplicate := pane
+	duplicate.Parent, duplicate.IssueNum = "525", -1
+	saveEmitterPanes(t, repo, pane, duplicate)
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted ambiguous stable row identity")
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, saved := range store.Panes {
+		if saved.ReportedState != string(backend.AgentRunning) || saved.StateRefinement {
+			t.Fatalf("ambiguous signal changed row telemetry: %+v", saved)
+		}
+	}
+}
+
+func TestRunSequenceWritesMonotonicValues(t *testing.T) {
+	repo := newEmitterRepo(t)
+	getenv := func(key string) string {
+		if key == telemetry.EmitterPathEnv {
+			return state.Path(repo)
+		}
+		return ""
+	}
+	for _, want := range []string{"1\n", "2\n"} {
+		var out, errOut bytes.Buffer
+		if code := RunSequence(getenv, &out, &errOut); code != 0 {
+			t.Fatalf("RunSequence() = %d, stderr %q", code, errOut.String())
+		}
+		if out.String() != want {
+			t.Fatalf("RunSequence() output = %q, want %q", out.String(), want)
+		}
+	}
+}
+
+func TestEmitFinalRowDiscardsOlderClaudeSequence(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	saveEmitterPanes(t, repo, pane)
+
+	signal.State, signal.Sequence = backend.AgentBlocked, 2
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	signal.State, signal.Sequence = backend.AgentWorking, 1
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "blocked" || got.ReportedStateSeq != 2 || !got.StateRefinement {
+		t.Fatalf("telemetry = (%q, %d, %t), want blocked at sequence 2", got.ReportedState, got.ReportedStateSeq, got.StateRefinement)
+	}
+}
+
+func TestEmitInvalidatesSequencedClaudeRowWithMissingWatermark(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	pane.ReportedState = string(backend.AgentBlocked)
+	pane.ReportedStateSeq = 0
+	pane.StateRefinement = true
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.ReportedStateSeq != 0 || got.StateRefinement ||
+		got.EmitterNonce == pane.EmitterNonce {
+		t.Fatalf("missing watermark was not fenced: %+v", got)
+	}
+}
+
+func TestEmitLegacyWriterCannotEraseSequencedWatermark(t *testing.T) {
+	repo := newEmitterRepo(t)
+	current, _, _ := finalEmitterFixture(t, repo)
+	current.LaunchArgs = []string{
+		"--settings", `{"command":"__fanout-emitter-sequence"}`, "prompt",
+	}
+	legacy := current
+	legacy.Parent, legacy.IssueNum = "525", 530
+	legacy.PaneID, legacy.WorkspaceID = "workspace-2:pane-1", "workspace-2"
+	legacy.WorkspaceLabel, legacy.TerminalID = "owned-label-2", "terminal-2"
+	legacy.EmitterRowKey = "issue:3:525:530"
+	legacy.LaunchNonce, legacy.EmitterNonce = strings.Repeat("c", 32), strings.Repeat("d", 32)
+	legacy.LaunchArgs = []string{"--settings", `{}`, "prompt"}
+	saveEmitterPanes(t, repo, legacy)
+
+	locked, err := state.LockProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.RecordPane(current); err != nil {
+		t.Fatal(errors.Join(err, locked.Unlock()))
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	signal := signalForPane(repo, current)
+	signal.State, signal.Sequence = backend.AgentBlocked, 2
+	if err := Emit(context.Background(), signal, exactObserver(current)); err != nil {
+		t.Fatal(err)
+	}
+	legacySignal := signalForPane(repo, legacy)
+	if err := Emit(context.Background(), legacySignal, exactObserver(legacy)); err == nil {
+		t.Fatal("Emit() accepted a legacy emitter after the sequence fence")
+	}
+	got := loadEmitterPaneByRowKey(t, repo, current.EmitterRowKey)
+	if got.ReportedState != string(backend.AgentBlocked) || got.ReportedStateSeq != 2 {
+		t.Fatalf("sequenced watermark after legacy signal = (%q, %d), want blocked at 2", got.ReportedState, got.ReportedStateSeq)
+	}
+}
+
+func TestEmitStaleFinalSequenceStillRebindsReplacedSession(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	first := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-first",
+	}
+	second := first
+	second.Value = "session-second"
+	pane.AgentSession = &first
+	pane.ReportedState = string(backend.AgentBlocked)
+	pane.ReportedStateSeq = 2
+	pane.StateRefinement = true
+	observer.observation.Panes[0].AgentSession = &second
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.AgentSession == nil || *got.AgentSession != second ||
+		got.ReportedState != string(backend.AgentBlocked) || got.ReportedStateSeq != 2 {
+		t.Fatalf("stale sequence did not preserve telemetry and rebind session: %+v", got)
+	}
+}
+
+func TestEmitStaleFinalSequenceStillInvalidatesTerminalReplacement(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	pane.ReportedState = string(backend.AgentBlocked)
+	pane.ReportedStateSeq = 2
+	pane.StateRefinement = true
+	observer.observation.Panes[0].TerminalID = "terminal-replacement"
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.ReportedStateSeq != 0 || got.StateRefinement ||
+		got.EmitterNonce == pane.EmitterNonce {
+		t.Fatalf("stale sequence did not invalidate replaced terminal: %+v", got)
+	}
+}
+
+func TestEmitRejectsMissingClaudeSequenceWithoutMutation(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	signal.Sequence = 0
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted a missing Claude sequence")
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != pane.ReportedState || got.StateRefinement || got.ReportedStateSeq != 0 {
+		t.Fatalf("missing sequence changed telemetry row: %+v", got)
 	}
 }
 
@@ -140,8 +402,9 @@ func TestEmitFinalRowPersistsDoneAgainstLateSignal(t *testing.T) {
 	pane, signal, observer := finalEmitterFixture(t, repo)
 	saveEmitterPanes(t, repo, pane)
 
-	for _, reported := range []backend.AgentState{backend.AgentDone, backend.AgentIdle, backend.AgentWorking} {
+	for index, reported := range []backend.AgentState{backend.AgentDone, backend.AgentIdle, backend.AgentWorking} {
 		signal.State = reported
+		signal.Sequence = uint64(index + 1)
 		if err := Emit(context.Background(), signal, observer); err != nil {
 			t.Fatal(err)
 		}
@@ -306,6 +569,7 @@ func TestEmitFinalRowRebindsReplacedSession(t *testing.T) {
 	second.Value = "session-second"
 	observer.observation.Panes[0].AgentSession = &second
 	signal.State = backend.AgentIdle
+	signal.Sequence++
 	if err := Emit(context.Background(), signal, observer); err != nil {
 		t.Fatal(err)
 	}
@@ -321,6 +585,7 @@ func TestEmitFinalRowRebindsReplacedSession(t *testing.T) {
 		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-foreign",
 	}
 	observer.observation.Panes[0].AgentSession = &foreign
+	signal.Sequence++
 	if err := Emit(context.Background(), signal, observer); err != nil {
 		t.Fatal(err)
 	}
@@ -328,6 +593,332 @@ func TestEmitFinalRowRebindsReplacedSession(t *testing.T) {
 	if got.AgentSession == nil || *got.AgentSession != second || got.ReportedState != "" ||
 		got.StateRefinement || got.EmitterNonce == pane.EmitterNonce {
 		t.Fatalf("foreign-provider session did not stale telemetry row = %+v", got)
+	}
+}
+
+func TestEmitFinalRowAcceptsLocationRebindFromStableSignal(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	originalNonce := pane.EmitterNonce
+	if err := pane.InvalidateTelemetryForLocationRebind(1); err != nil {
+		t.Fatal(err)
+	}
+	signal.Sequence = 2
+	pane.WorkspaceID, pane.PaneID, pane.TerminalID = "workspace-2", "workspace-2:pane-1", "terminal-2"
+	observer := exactObserver(pane)
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "working" || got.ReportedStateSeq != 2 || !got.StateRefinement ||
+		got.EmitterNonce == originalNonce || got.EmitterRebindNonce != originalNonce {
+		t.Fatalf("location-rebound telemetry row = %+v", got)
+	}
+
+	signal.State, signal.Sequence = backend.AgentIdle, 3
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got = loadEmitterPane(t, repo)
+	if got.ReportedState != "idle" || got.ReportedStateSeq != 3 || !got.StateRefinement ||
+		got.EmitterRebindNonce != originalNonce {
+		t.Fatalf("continued location-rebound telemetry row = %+v", got)
+	}
+}
+
+func TestEmitFinalRowFencesMovedLocationUntilSessionBindingHeals(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	session := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-current",
+	}
+	pane.RepoRoot, pane.AgentSession = filepath.Dir(pane.RepoKey), &session
+	if sequence, err := state.NextTelemetrySequence(context.Background(), state.Path(repo)); err != nil || sequence != 1 {
+		t.Fatalf("initial telemetry sequence = %d, err=%v", sequence, err)
+	}
+	originalNonce := pane.EmitterNonce
+	observer := exactObserver(pane)
+	observer.observation.Panes[0].Ref.Workspace = "workspace-2"
+	observer.observation.Panes[0].Ref.Pane = "workspace-2:pane-1"
+	observer.observation.Panes[0].TerminalID = "terminal-2"
+	observer.observation.ProcessError = errors.New("old pane is absent")
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	fenced := loadEmitterPane(t, repo)
+	if fenced.WorkspaceID != pane.WorkspaceID || fenced.PaneID != pane.PaneID ||
+		fenced.TerminalID != pane.TerminalID || fenced.EmitterRebindNonce != originalNonce ||
+		fenced.EmitterRebindSequence != 2 || fenced.ReportedState != "" || fenced.StateRefinement {
+		t.Fatalf("telemetry-triggered location fence = %+v", fenced)
+	}
+
+	healed, err := sessionbinding.ReloadPane(repo, fenced, func() ([]backend.LivePane, error) {
+		return observer.observation.Panes, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healed.WorkspaceID != "workspace-2" || healed.PaneID != "workspace-2:pane-1" ||
+		healed.TerminalID != "terminal-2" || healed.EmitterRebindNonce != originalNonce ||
+		healed.EmitterRebindSequence != 3 {
+		t.Fatalf("sessionbinding location heal = %+v", healed)
+	}
+
+	signal.Sequence = 4
+	if err := Emit(context.Background(), signal, exactObserver(healed)); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "working" || got.ReportedStateSeq != 4 || !got.StateRefinement {
+		t.Fatalf("post-heal telemetry = %+v", got)
+	}
+}
+
+func TestEmitFinalRowPreservesEmitterAcrossMissingLocationUntilHeal(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	session := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-current",
+	}
+	pane.RepoRoot, pane.AgentSession = filepath.Dir(pane.RepoKey), &session
+	if sequence, err := state.NextTelemetrySequence(context.Background(), state.Path(repo)); err != nil || sequence != 1 {
+		t.Fatalf("initial telemetry sequence = %d, err=%v", sequence, err)
+	}
+	originalNonce := pane.EmitterNonce
+	observer := &fakeObserver{observation: Observation{ProcessError: errors.New("old pane is absent")}}
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	fenced := loadEmitterPane(t, repo)
+	if fenced.WorkspaceID != pane.WorkspaceID || fenced.PaneID != pane.PaneID ||
+		fenced.TerminalID != pane.TerminalID || fenced.EmitterRebindNonce != originalNonce ||
+		fenced.EmitterRebindSequence != 2 || fenced.ReportedState != "" || fenced.StateRefinement {
+		t.Fatalf("missing location fence = %+v", fenced)
+	}
+
+	movedObserver := exactObserver(pane)
+	moved := &movedObserver.observation.Panes[0]
+	moved.Ref.Workspace, moved.Ref.Pane = "workspace-2", "workspace-2:pane-1"
+	moved.TerminalID = "terminal-2"
+	healed, err := sessionbinding.ReloadPane(repo, fenced, func() ([]backend.LivePane, error) {
+		return movedObserver.observation.Panes, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healed.WorkspaceID != moved.Ref.Workspace || healed.PaneID != moved.Ref.Pane ||
+		healed.TerminalID != moved.TerminalID || healed.EmitterRebindNonce != originalNonce ||
+		healed.EmitterRebindSequence != 3 {
+		t.Fatalf("healed missing location = %+v", healed)
+	}
+
+	signal.Sequence = 4
+	if err := Emit(context.Background(), signal, exactObserver(healed)); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "working" || got.ReportedStateSeq != 4 || !got.StateRefinement ||
+		got.EmitterRebindNonce != originalNonce {
+		t.Fatalf("post-heal nudge state = %+v", got)
+	}
+}
+
+func TestEmitFinalRowPreservesEmitterAcrossAmbiguousLocationUntilHeal(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	session := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-current",
+	}
+	pane.RepoRoot, pane.AgentSession = filepath.Dir(pane.RepoKey), &session
+	if sequence, err := state.NextTelemetrySequence(context.Background(), state.Path(repo)); err != nil || sequence != 1 {
+		t.Fatalf("initial telemetry sequence = %d, err=%v", sequence, err)
+	}
+	originalNonce := pane.EmitterNonce
+	movedObserver := exactObserver(pane)
+	moved := &movedObserver.observation.Panes[0]
+	moved.Ref.Workspace, moved.Ref.Pane = "workspace-2", "workspace-2:pane-1"
+	moved.TerminalID = "terminal-2"
+	uncertain := *moved
+	uncertain.AgentPresent, uncertain.AgentNamed = false, false
+	uncertain.AgentProvider, uncertain.AgentID, uncertain.AgentSession = "", "", nil
+	duplicate := uncertain
+	duplicate.Ref.Workspace, duplicate.Ref.Pane = "workspace-3", "workspace-3:pane-1"
+	duplicate.TerminalID = "terminal-3"
+	observer := &fakeObserver{observation: Observation{
+		Panes: []backend.LivePane{uncertain, duplicate}, ProcessError: errors.New("old pane is absent"),
+	}}
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	fenced := loadEmitterPane(t, repo)
+	if fenced.WorkspaceID != pane.WorkspaceID || fenced.PaneID != pane.PaneID ||
+		fenced.TerminalID != pane.TerminalID || fenced.EmitterRebindNonce != originalNonce ||
+		fenced.EmitterRebindSequence != 2 || fenced.ReportedState != "" || fenced.StateRefinement {
+		t.Fatalf("ambiguous location fence = %+v", fenced)
+	}
+
+	healed, err := sessionbinding.ReloadPane(repo, fenced, func() ([]backend.LivePane, error) {
+		return movedObserver.observation.Panes, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healed.WorkspaceID != moved.Ref.Workspace || healed.PaneID != moved.Ref.Pane ||
+		healed.TerminalID != moved.TerminalID || healed.EmitterRebindNonce != originalNonce ||
+		healed.EmitterRebindSequence != 3 {
+		t.Fatalf("healed ambiguous location = %+v", healed)
+	}
+
+	signal.Sequence = 4
+	if err := Emit(context.Background(), signal, exactObserver(healed)); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "working" || got.ReportedStateSeq != 4 || !got.StateRefinement ||
+		got.EmitterRebindNonce != originalNonce {
+		t.Fatalf("post-heal telemetry = %+v", got)
+	}
+}
+
+func TestEmitFinalRowRejectsLocationRebindSequenceReplay(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	pane.ReportedStateSeq = 7
+	if err := pane.InvalidateTelemetryForLocationRebind(8); err != nil {
+		t.Fatal(err)
+	}
+	signal.Sequence = 8
+	pane.WorkspaceID, pane.PaneID, pane.TerminalID = "workspace-2", "workspace-2:pane-1", "terminal-2"
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, exactObserver(pane)); err == nil {
+		t.Fatal("Emit() accepted a signal allocated before location rebind")
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.ReportedStateSeq != 0 || got.StateRefinement ||
+		got.EmitterRebindNonce == "" || got.EmitterRebindSequence != 8 {
+		t.Fatalf("replayed location-rebound telemetry row = %+v", got)
+	}
+}
+
+func TestEmitFinalRowPreservesNewerLocationRebindDuringObservation(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	originalNonce := pane.EmitterNonce
+	if err := pane.InvalidateTelemetryForLocationRebind(1); err != nil {
+		t.Fatal(err)
+	}
+	signal.Sequence = 2
+	pane.WorkspaceID, pane.PaneID, pane.TerminalID = "workspace-2", "workspace-2:pane-1", "terminal-2"
+	exact := exactObserver(pane)
+	observer := &blockingObserver{
+		observation: exact.observation, entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	saveEmitterPanes(t, repo, pane)
+	emitErr := make(chan error, 1)
+	go func() { emitErr <- Emit(context.Background(), signal, observer) }()
+
+	select {
+	case <-observer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("observer was not called")
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Panes[0].InvalidateTelemetryForLocationRebind(1); err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes[0].WorkspaceID = "workspace-3"
+	locked.Panes[0].PaneID = "workspace-3:pane-1"
+	locked.Panes[0].TerminalID = "terminal-3"
+	if err := locked.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	close(observer.release)
+
+	if err := <-emitErr; err == nil {
+		t.Fatal("Emit() accepted an observation from the previous healed location")
+	}
+	got := loadEmitterPane(t, repo)
+	if got.WorkspaceID != "workspace-3" || got.EmitterRebindNonce != originalNonce ||
+		got.ReportedState != "" || got.StateRefinement {
+		t.Fatalf("newer location rebind was cleared by an old observation: %+v", got)
+	}
+}
+
+func TestEmitFinalRowRejectsLegacySignalForLocationRebind(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	if err := pane.InvalidateTelemetryForLocationRebind(1); err != nil {
+		t.Fatal(err)
+	}
+	signal.Sequence = 2
+	pane.WorkspaceID, pane.PaneID, pane.TerminalID = "workspace-2", "workspace-2:pane-1", "terminal-2"
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, exactObserver(pane)); err == nil {
+		t.Fatal("Emit() accepted a location rebind without stable signal identity")
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.StateRefinement || got.EmitterRebindNonce == "" {
+		t.Fatalf("rejected location-rebound telemetry row = %+v", got)
+	}
+}
+
+func TestEmitFinalRowKeepsUnsequencedCodexLocationRebindUnset(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, _, _ := finalEmitterFixture(t, repo)
+	pane.Agent, pane.PlanMode = "codex", true
+	signal := signalForPane(repo, pane)
+	if err := pane.InvalidateTelemetryForLocationRebind(1); err != nil {
+		t.Fatal(err)
+	}
+	pane.WorkspaceID, pane.PaneID, pane.TerminalID = "workspace-2", "workspace-2:pane-1", "terminal-2"
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, exactObserver(pane)); err == nil {
+		t.Fatal("Emit() accepted an unsequenced Codex location rebind")
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.StateRefinement || got.EmitterRebindNonce == "" {
+		t.Fatalf("unsequenced Codex location rebind = %+v", got)
+	}
+}
+
+func TestEmitFinalRowClearsLocationRebindAfterAgentIdentityChange(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	if err := pane.InvalidateTelemetryForLocationRebind(1); err != nil {
+		t.Fatal(err)
+	}
+	signal.Sequence = 2
+	pane.WorkspaceID, pane.PaneID, pane.TerminalID = "workspace-2", "workspace-2:pane-1", "terminal-2"
+	observer := exactObserver(pane)
+	observer.observation.Panes[0].AgentID = "foreign-agent"
+	previousNonce := pane.EmitterNonce
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.StateRefinement || got.EmitterRebindNonce != "" ||
+		got.EmitterNonce == previousNonce {
+		t.Fatalf("identity-changed location-rebound telemetry row = %+v", got)
 	}
 }
 
@@ -359,6 +950,7 @@ func TestEmitFinalRowSurvivesDroppedAgentName(t *testing.T) {
 	// stales the row.
 	observer.observation.Panes[0].AgentID = "someone-else"
 	observer.observation.Panes[0].AgentNamed = true
+	signal.Sequence++
 	if err := Emit(context.Background(), signal, observer); err != nil {
 		t.Fatal(err)
 	}
@@ -462,8 +1054,9 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, reported := range []backend.AgentState{backend.AgentIdle, backend.AgentDone, backend.AgentWorking} {
+	for index, reported := range []backend.AgentState{backend.AgentIdle, backend.AgentDone, backend.AgentWorking} {
 		signal.State = reported
+		signal.Sequence = uint64(index + 1)
 		err = Emit(context.Background(), signal, observer)
 		if err != nil {
 			t.Fatal(err)
@@ -475,9 +1068,56 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 	}
 	got, found := stored.FindIntent(intent.ID)
 	wantSession := observer.observation.Panes[0].AgentSession
-	if !found || got.Launch.PendingReportedState != "done" || got.Launch.PendingAgentSession == nil ||
+	if !found || got.Launch.PendingReportedState != "done" || got.Launch.PendingReportedSeq != 3 ||
+		got.Launch.PendingAgentSession == nil ||
 		wantSession == nil || *got.Launch.PendingAgentSession != *wantSession {
 		t.Fatalf("pending intent = (%+v, %t), want done", got, found)
+	}
+}
+
+func TestEmitAcceptsPinnedLegacyLauncherForPendingIntent(t *testing.T) {
+	repo := newEmitterRepo(t)
+	intent, signal, observer := pendingEmitterFixture(t, repo)
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterIntent(t, repo, intent)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := stored.FindIntent(intent.ID)
+	if !found || got.Launch.PendingReportedState != string(backend.AgentWorking) ||
+		got.Launch.PendingAgentSession == nil {
+		t.Fatalf("legacy pending telemetry = (%+v, %t), want working", got, found)
+	}
+}
+
+func TestEmitStalePendingSequenceStillRebindsReplacedSession(t *testing.T) {
+	repo := newEmitterRepo(t)
+	intent, signal, observer := pendingEmitterFixture(t, repo)
+	first := *observer.observation.Panes[0].AgentSession
+	second := first
+	second.Value = "pending-session-replaced"
+	intent.Launch.PendingReportedState = string(backend.AgentBlocked)
+	intent.Launch.PendingReportedSeq = 2
+	intent.Launch.PendingAgentSession = &first
+	observer.observation.Panes[0].AgentSession = &second
+	saveEmitterIntent(t, repo, intent)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := stored.FindIntent(intent.ID)
+	if !found || got.Launch.PendingAgentSession == nil || *got.Launch.PendingAgentSession != second ||
+		got.Launch.PendingReportedState != string(backend.AgentBlocked) || got.Launch.PendingReportedSeq != 2 {
+		t.Fatalf("stale provisional sequence did not preserve telemetry and rebind session: (%+v, %t)", got, found)
 	}
 }
 
@@ -521,6 +1161,9 @@ func TestEmitPendingIntentRejectsIncompleteIdentityMatch(t *testing.T) {
 func TestEmitPendingIntentRejectsWorkspaceLabelReplacement(t *testing.T) {
 	repo := newEmitterRepo(t)
 	intent, signal, observer := pendingEmitterFixture(t, repo)
+	intent.Launch.PendingReportedState = string(backend.AgentBlocked)
+	intent.Launch.PendingReportedSeq = 2
+	intent.Launch.PendingAgentSession = observer.observation.Panes[0].AgentSession
 	saveEmitterIntent(t, repo, intent)
 	observer.observation.Panes[0].WorkspaceLabel = "foreign-label"
 
@@ -532,7 +1175,8 @@ func TestEmitPendingIntentRejectsWorkspaceLabelReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, found := stored.FindIntent(intent.ID)
-	if !found || got.Launch.PendingReportedState != "" {
+	if !found || got.Launch.PendingReportedState != string(backend.AgentBlocked) ||
+		got.Launch.PendingReportedSeq != 2 {
 		t.Fatalf("replaced provisional workspace changed intent: (%+v, %t)", got, found)
 	}
 }
@@ -576,7 +1220,9 @@ func finalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetry.Signa
 		SessionID: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		EmitterRowKey: "issue:3:524:529", LaunchNonce: strings.Repeat("a", 32),
 		EmitterNonce: strings.Repeat("b", 32), LaunchExecutable: "/opt/bin/claude",
-		LaunchArgs: []string{"--settings", "{}", "prompt"},
+		LaunchArgs: []string{
+			"--settings", `{"command":"` + telemetry.SequenceCommand + `"}`, "prompt",
+		},
 	}
 	signal := signalForPane(repo, pane)
 	return pane, signal, exactObserver(pane)
@@ -626,6 +1272,7 @@ func pendingEmitterFixture(t *testing.T, repo string) (state.LaunchIntent, telem
 			LauncherReady: true, TokenIssued: true,
 		},
 	}
+	signal.WorkspaceLabel = intent.Resource.Label
 	observer.observation.Panes[0].WorkspaceLabel = intent.Resource.Label
 	return intent, signal, observer
 }
@@ -642,6 +1289,7 @@ func genericPendingEmitterFixture(t *testing.T, repo string) (state.LaunchIntent
 	intent.Resource.CurrentPath, intent.Resource.RepoKey, intent.Resource.RepoRoot = repo, "", ""
 	intent.Coordinator = state.RuntimeResource{}
 	signal.RowKey = intent.ID
+	signal.WorktreePath = intent.WorktreePath
 	live := &observer.observation.Panes[0]
 	live.CurrentPath, live.WorktreePath, live.RepoKey, live.ProjectRoot = repo, "", "", ""
 	observer.observation.ProcessInfo.ForegroundProcesses[0].CWD = repo
@@ -649,14 +1297,19 @@ func genericPendingEmitterFixture(t *testing.T, repo string) (state.LaunchIntent
 }
 
 func signalForPane(repo string, pane state.Pane) telemetry.Signal {
-	return telemetry.Signal{
+	signal := telemetry.Signal{
 		StatePath: state.Path(repo), RowKey: pane.EmitterRowKey,
 		LaunchNonce: pane.LaunchNonce, EmitterNonce: pane.EmitterNonce,
 		Backend: backend.Herdr, Session: pane.SessionID, SocketPath: pane.SocketPath,
-		WorkspaceID: pane.WorkspaceID, PaneID: pane.PaneID,
+		WorkspaceID: pane.WorkspaceID, WorkspaceLabel: pane.WorkspaceLabel,
+		WorktreePath: pane.WorktreePath, PaneID: pane.PaneID,
 		TerminalID: pane.TerminalID, Agent: pane.Agent, AgentID: pane.AgentID,
 		State: backend.AgentWorking,
 	}
+	if pane.Agent == "claude" {
+		signal.Sequence = 1
+	}
+	return signal
 }
 
 func exactObserver(pane state.Pane) *fakeObserver {
@@ -671,7 +1324,8 @@ func exactObserver(pane state.Pane) *fakeObserver {
 		TerminalID:     pane.TerminalID, RepoKey: pane.RepoKey,
 		ProjectRoot:  filepath.Dir(pane.RepoKey),
 		AgentPresent: true, AgentProvider: pane.Agent, AgentID: pane.AgentID,
-		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
+		AgentSession: pane.AgentSession,
+		SessionID:    pane.SessionID, SocketPath: pane.SocketPath,
 	}
 	return &fakeObserver{observation: Observation{
 		Panes: []backend.LivePane{live},
@@ -726,6 +1380,21 @@ func loadEmitterPane(t *testing.T, repo string) state.Pane {
 		t.Fatal("state has no pane")
 	}
 	return store.Panes[0]
+}
+
+func loadEmitterPaneByRowKey(t *testing.T, repo, rowKey string) state.Pane {
+	t.Helper()
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pane := range store.Panes {
+		if pane.EmitterRowKey == rowKey {
+			return pane
+		}
+	}
+	t.Fatalf("state has no pane for row key %q", rowKey)
+	return state.Pane{}
 }
 
 func newEmitterRepo(t *testing.T) string {

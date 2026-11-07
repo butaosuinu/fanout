@@ -21,6 +21,11 @@
   "rules": {
     // automatic JSX runtime (tsconfig jsx: "react-jsx") なので React の import は不要。
     "react/react-in-jsx-scope": "off",
+    // React Compiler は未導入。既存 hook は lifecycle 状態同期・最新値保持・再計測の
+    // trigger にこれらのパターンを使うため、compiler 導入時まで明示的に外す。
+    "react/exhaustive-effect-dependencies": "off",
+    "react/refs": "off",
+    "react/set-state-in-effect": "off",
     // 既存コードはスプレッドコピー後に sort しており非破壊。toSorted は lib ES2022 に無い。
     "unicorn/no-array-sort": "off",
     "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],

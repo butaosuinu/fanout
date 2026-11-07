@@ -47,6 +47,20 @@ type countingIssueStatusProvider struct {
 	waveCalls   map[string]int
 	waveNums    map[string][]int
 	waves       map[string]sessionview.WaveGraph
+	repo        string
+	stacks      map[int]*ghissue.PRStack
+	stackCalls  [][]int
+}
+
+func (f *countingIssueStatusProvider) NameWithOwner() string { return f.repo }
+
+func (f *countingIssueStatusProvider) PRStacks(nums []int) (map[int]*ghissue.PRStack, error) {
+	f.stackCalls = append(f.stackCalls, slices.Clone(nums))
+	out := make(map[int]*ghissue.PRStack, len(nums))
+	for _, num := range nums {
+		out[num] = f.stacks[num]
+	}
+	return out, nil
 }
 
 func (f *countingIssueStatusProvider) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
@@ -378,6 +392,60 @@ func TestIssueStatusLoaderThrottlesWaveAndUnrecordedPRsAcrossTicks(t *testing.T)
 	}
 	if gh.waveCalls["100"] != 2 || gh.issueCalls[101] != 3 || gh.issueCalls[102] != 2 {
 		t.Fatalf("calls after wave interval = wave:%v issue:%v, want wave=2 #101=3 #102=2", gh.waveCalls, gh.issueCalls)
+	}
+}
+
+// TestIssueStatusLoaderTagsStackedPRs pins the PR column's stack tag: stacks
+// are read for this repository's pull requests only, on the wave cadence like
+// the dashboard poller, and land on the row's primary PR.
+func TestIssueStatusLoaderTagsStackedPRs(t *testing.T) {
+	root := t.TempDir()
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"layer-two","paneId":"%1"}
+	]}`)
+	gh := &countingIssueStatusProvider{
+		repo: "o/r",
+		waves: map[string]sessionview.WaveGraph{"100": {
+			Children: []ghissue.Issue{{Number: 101, Title: "layer two", State: "OPEN"}},
+			Info:     map[int]sessionview.WaveInfo{101: {Wave: 1}},
+		}},
+		issuePRs: map[int][]ghissue.PRRef{101: {
+			{Number: 844, State: "OPEN", BaseRepo: "o/r"},
+			// Another repository's #7 shares nothing with this one's.
+			{Number: 7, State: "CLOSED", BaseRepo: "other/repo"},
+		}},
+		stacks: map[int]*ghissue.PRStack{844: {Number: 12, Size: 3, BaseRef: "main", Position: 2}},
+	}
+	loader := newIssueStatusLoader(time.Minute)
+	loader.resolve = func(string) (issueStatusProvider, error) { return gh, nil }
+	firstAt := time.Unix(100, 0)
+
+	statuses, err := loader.loadIssueStatuses(root, nil, firstAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := statuses[keyForIssue("100", 101)]
+	if got := summarizePRs(status.PRs); got != "#844 open ⧉ 2/3" {
+		t.Fatalf("summarizePRs() = %q, want the stack tag", got)
+	}
+	if !reflect.DeepEqual(gh.stackCalls, [][]int{{844}}) {
+		t.Fatalf("PRStacks calls = %v, want this repository's #844 only", gh.stackCalls)
+	}
+	if loader.prCache[101].PRs[0].Stack != nil {
+		t.Fatal("the PR cache was tagged in place, want a tagged copy")
+	}
+
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(20*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh.stackCalls) != 1 {
+		t.Fatalf("PRStacks calls inside the wave interval = %d, want 1", len(gh.stackCalls))
+	}
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh.stackCalls) != 2 {
+		t.Fatalf("PRStacks calls after the wave interval = %d, want 2", len(gh.stackCalls))
 	}
 }
 
@@ -5644,6 +5712,138 @@ func TestNewPaneLaunchSuccessReloadsStateAndFocusesFirstCreatedPane(t *testing.T
 	}
 	if !strings.Contains(m.notice, launchNotice) || !strings.Contains(m.notice, "focused %2") {
 		t.Fatalf("notice = %q, want launch detail and focus result", m.notice)
+	}
+}
+
+func TestNewPaneLaunchUsesCreatedBindingBackendAcrossConsoleBackends(t *testing.T) {
+	var focused []string
+	m := newModel(Options{
+		BackendSelection: backend.Selection{Name: backend.Herdr},
+		FocusPane: func(paneID string) error {
+			focused = append(focused, paneID)
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	binding := backend.PaneBinding{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%2"}}
+
+	_, cmd := m.Update(launchPaneMsg{
+		count: 1, createdPaneIDs: []string{"%2"}, createdBindings: []backend.PaneBinding{binding},
+	})
+	msg := findPaneFocusedMsg(t, runCmd(cmd))
+	if msg.err != nil || !reflect.DeepEqual(focused, []string{"%2"}) {
+		t.Fatalf("cross-backend focus = msg %+v panes %v, want tmux pane %%2", msg, focused)
+	}
+}
+
+func TestFocusCreatedHerdrBindingUsesExactRowAcrossConsoleBackendAndLateSession(t *testing.T) {
+	root := t.TempDir()
+	launchedPane := createdHerdrFocusPane("100", 101, "session-a")
+	currentPane := launchedPane
+	currentPane.AgentSession = &backend.AgentSessionRef{
+		Source: backend.AgentSessionSource("codex"), Agent: "codex", Kind: "id", Value: "session-1",
+	}
+	body, err := json.Marshal(state.Store{SchemaVersion: state.SchemaVersion, Panes: []state.Pane{currentPane}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTUIState(t, root, string(body))
+	focusCalls := 0
+	m := newModel(Options{
+		ProjectRoot:      root,
+		BackendSelection: backend.Selection{Name: backend.Tmux},
+		ListLive: func() ([]backend.LivePane, error) {
+			return []backend.LivePane{liveCreatedHerdrFocusPane(currentPane)}, nil
+		},
+		ManagedActionDisabled: func(state.Pane) string { return "" },
+		FocusManagedPane: func(got state.Pane) error {
+			focusCalls++
+			if !got.RuntimeBinding().Equal(currentPane.RuntimeBinding()) {
+				t.Fatalf("focused pane = %+v, want exact current row", got)
+			}
+			return nil
+		},
+	})
+
+	msg := m.focusCreatedBindingCmd(launchedPane.RuntimeBinding(), "created")()
+	focused, ok := msg.(paneFocusedMsg)
+	if !ok || focused.err != nil || focusCalls != 1 {
+		t.Fatalf("exact Herdr focus = msg %#v err %v calls %d", msg, focused.err, focusCalls)
+	}
+}
+
+func TestNewPaneLaunchSkipsHerdrFocusWithoutExactBinding(t *testing.T) {
+	focusCalls := 0
+	m := newModel(Options{
+		ProjectRoot:      t.TempDir(),
+		BackendSelection: backend.Selection{Name: backend.Herdr},
+		FocusManagedPane: func(state.Pane) error {
+			focusCalls++
+			return nil
+		},
+	})
+
+	updated, cmd := m.Update(launchPaneMsg{count: 1, createdPaneIDs: []string{"w1:p1"}})
+	m = updated.(model)
+	_ = runCmd(cmd)
+	if focusCalls != 0 || !strings.Contains(m.notice, "focus skipped: exact created pane identity is unavailable") {
+		t.Fatalf("unresolved focus = calls %d notice %q", focusCalls, m.notice)
+	}
+}
+
+func TestUniqueLiveHerdrBindingSelectsExactRowWhenPaneIDIsReused(t *testing.T) {
+	launchedPane := createdHerdrFocusPane("100", 101, "session-a")
+	launched := launchedPane.RuntimeBinding()
+	reused := createdHerdrFocusPane("200", 201, "session-b")
+	views := []paneView{
+		{savedPane: reused, Parent: reused.Parent, IssueNum: reused.IssueNum, PaneID: reused.PaneID, Backend: reused.Backend, TmuxState: "live"},
+		{savedPane: launchedPane, Parent: launchedPane.Parent, IssueNum: launchedPane.IssueNum, PaneID: launchedPane.PaneID, Backend: launchedPane.Backend, TmuxState: "live"},
+	}
+
+	got, err := uniqueLiveHerdrBinding(views, launched)
+	if err != nil || got.Parent != launchedPane.Parent || got.IssueNum != launchedPane.IssueNum {
+		t.Fatalf("exact row focus = pane %+v err %v, want %s/%d", got, err, launchedPane.Parent, launchedPane.IssueNum)
+	}
+	if _, err := uniqueLiveHerdrBinding(views[:1], launched); err == nil {
+		t.Fatal("reused pane ID from another session was accepted after the launched row disappeared")
+	}
+}
+
+func TestSameCreatedPaneBindingAdmitsFirstAgentSessionOnlyForRecordedAgent(t *testing.T) {
+	launched := createdHerdrFocusPane("100", 101, "session-a").RuntimeBinding()
+	current := launched
+	current.AgentSession = &backend.AgentSessionRef{
+		Source: backend.AgentSessionSource("codex"), Agent: "codex", Kind: "id", Value: "session-1",
+	}
+	if !launched.SameLaunchTarget(current) {
+		t.Fatal("first agent session did not match its exact launch binding")
+	}
+	current.AgentSession = &backend.AgentSessionRef{
+		Source: backend.AgentSessionSource("claude"), Agent: "claude", Kind: "id", Value: "session-1",
+	}
+	if launched.SameLaunchTarget(current) {
+		t.Fatal("foreign agent session matched the launch binding")
+	}
+}
+
+func createdHerdrFocusPane(parent string, issueNum int, session string) state.Pane {
+	return state.Pane{
+		Parent: parent, IssueNum: issueNum, Backend: backend.Herdr, PaneID: "w1:p1",
+		WorkspaceID: "workspace-1", WorkspaceLabel: "owned-label", TerminalID: "terminal-1",
+		RepoKey: "/repo/.git", WorktreePath: "/repo/worktree", Agent: "codex", AgentID: "fanout-agent",
+		SessionID: session, SocketPath: "/tmp/" + session + ".sock",
+		EmitterRowKey: "issue:3:" + parent, LaunchNonce: "launch", EmitterNonce: "emitter",
+		LaunchExecutable: "/usr/bin/codex", LaunchArgs: []string{"--remote", "ws://127.0.0.1:1"},
+	}
+}
+
+func liveCreatedHerdrFocusPane(pane state.Pane) backend.LivePane {
+	return backend.LivePane{
+		Ref:         backend.PaneRef{Backend: pane.Backend, Workspace: pane.WorkspaceID, Pane: pane.PaneID},
+		CurrentPath: pane.WorktreePath, WorkspaceLabel: pane.WorkspaceLabel, TerminalID: pane.TerminalID,
+		AgentID: pane.AgentID, AgentNamed: true, AgentProvider: pane.Agent, AgentSession: pane.AgentSession,
+		AgentPresent: true, RepoKey: pane.RepoKey, ProjectRoot: "/repo", WorktreePath: pane.WorktreePath,
+		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 	}
 }
 

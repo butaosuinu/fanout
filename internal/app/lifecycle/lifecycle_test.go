@@ -18,6 +18,13 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
+func TestMain(m *testing.M) {
+	if hooks.IsBackgroundRunnerRequest(os.Args[1:]) {
+		os.Exit(hooks.RunBackgroundRunner(os.Args[2:], os.Stderr))
+	}
+	os.Exit(m.Run())
+}
+
 type nopLogger struct{}
 
 func (nopLogger) Info(string, ...any) {}
@@ -27,12 +34,16 @@ func (nopLogger) Err(string, ...any)  {}
 func (nopLogger) Stderr() io.Writer   { return io.Discard }
 
 type captureLogger struct {
-	errors []string
+	errors   []string
+	warnings []string
 }
 
 func (*captureLogger) Info(string, ...any) {}
 func (*captureLogger) Ok(string, ...any)   {}
-func (*captureLogger) Warn(string, ...any) {}
+func (l *captureLogger) Warn(format string, args ...any) {
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
+
 func (l *captureLogger) Err(format string, args ...any) {
 	l.errors = append(l.errors, fmt.Sprintf(format, args...))
 }
@@ -462,6 +473,64 @@ func TestLockStateAfterHerdrPrecheckReacquiresCombinedLockWhenHerdrAppears(t *te
 	}()
 	if _, err := locked.LaunchJournal(projectRoot); err != nil {
 		t.Fatalf("Herdr row found after precheck without combined lock: %v", err)
+	}
+}
+
+func TestRetirePaneStateRowsSaveFailurePreservesAllRows(t *testing.T) {
+	projectRoot := t.TempDir()
+	statePath := state.Path(projectRoot)
+	panes := []state.Pane{
+		{Parent: "423", IssueNum: 425, Backend: backend.Herdr, PaneID: "w2:p1", WorktreePath: "/wt/shared"},
+		{Parent: "423", IssueNum: -1, Kind: state.PaneKindAttachedAgent, PaneID: "w2:p2", WorktreePath: "/wt/shared"},
+	}
+	locked, err := state.Lock(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = append([]state.Pane(nil), panes...)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(errors.Join(saveErr, locked.Unlock()))
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	locked, err = state.Lock(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if locked != nil {
+			if unlockErr := locked.Unlock(); unlockErr != nil {
+				t.Error(unlockErr)
+			}
+		}
+	}()
+	stateDir := filepath.Dir(statePath)
+	if chmodErr := os.Chmod(stateDir, 0o500); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	t.Cleanup(func() {
+		if chmodErr := os.Chmod(stateDir, 0o755); chmodErr != nil {
+			t.Error(chmodErr)
+		}
+	})
+
+	if retireErr := retirePaneStateRows(Options{ProjectRoot: projectRoot}, locked, panes, ClosePaneOnly); retireErr == nil {
+		t.Fatal("state retirement save unexpectedly succeeded")
+	}
+	if chmodErr := os.Chmod(stateDir, 0o755); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	locked = nil
+	stored, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored.Panes, panes) {
+		t.Fatalf("rows after failed retirement = %+v, want %+v", stored.Panes, panes)
 	}
 }
 

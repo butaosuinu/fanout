@@ -262,6 +262,7 @@ func installIssueOrchestratorCleanupTmuxShim(t *testing.T, liveKey string, killF
 set -euo pipefail
 printf '%s\n' "$@" >> "$TMUX_CLEANUP_LOG"
 printf '%s\n' '---' >> "$TMUX_CLEANUP_LOG"
+if [[ "${1:-}" == "-u" ]]; then shift; fi
 case "${1:-} ${2:-} ${3:-}" in
 "list-panes -a -F")
 	if [[ ! -s "$TMUX_CLEANUP_ACTIVE" ]]; then

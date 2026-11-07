@@ -1,18 +1,21 @@
 package panelaunch
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
@@ -252,10 +255,60 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	if parentRef == "" {
 		parentRef = ManualParentRef
 	}
-	number := NextManagedSyntheticPaneNumber(projectRoot, store, parentRef)
+	number := nextAttachedSyntheticPaneNumber(projectRoot, store, parentRef, targetPath)
+	journal, ownerRoot := manualAllocationJournal(projectRoot)
+	allocationPath := canonicalAttachedAllocationPath(targetPath)
+	for {
+		req := buildAttachedRequest(cfg, projectRoot, hookConfig, prompt, targetPath, target, parentRef, number)
+		intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
+		if !found || attachedIntentMatchesRequest(intent, req) {
+			return req
+		}
+		number--
+		for manualCoordinatorNumberUnavailable(journal, ownerRoot, allocationPath, number) {
+			number--
+		}
+	}
+}
+
+func buildAttachedRequest(
+	cfg *cliflags.Config,
+	projectRoot string,
+	hookConfig hooks.Config,
+	prompt, targetPath string,
+	target AttachTarget,
+	parentRef string,
+	number int,
+) Request {
 	agentName := cfg.Agent
 	title := attachedPaneTitle(agentName, target.SourceLabel, targetPath)
 	slug := attachedPaneSlug(targetPath, agentName, number)
+	body := prompt
+	prompt, briefingPath, briefingBody := attachedLaunchPrompt(
+		cfg, projectRoot, prompt, title, parentRef, target, number,
+	)
+	launchMode := launchModeFromPlanFlag(cfg)
+	req := Request{
+		ParentRef: parentRef, Number: number, Title: title, Body: body,
+		ShortTitle: ShortIssueTitle(title), Slug: slug, DisplayNameOverride: title,
+		BranchName: strings.TrimSpace(target.SourceBranchName), Prompt: prompt,
+		SourceParent: parentRef, SourceIssueNum: target.SourceIssueNum,
+		SourceTaskID: strings.TrimSpace(target.SourceTaskID), Agent: agentName,
+		Hooks: hookConfig, BriefingPath: briefingPath, BriefingBody: briefingBody,
+		LaunchMode: launchMode,
+	}
+	if req.CodexPlanMode() {
+		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
+	}
+	return req
+}
+
+func attachedLaunchPrompt(
+	cfg *cliflags.Config,
+	projectRoot, prompt, title, parentRef string,
+	target AttachTarget,
+	number int,
+) (string, string, string) {
 	body := prompt
 	shortPrompt := FirstPromptLine(prompt)
 	if shortPrompt == "" {
@@ -265,50 +318,60 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	if oversized {
 		shortPrompt = ShortIssueTitle(shortPrompt)
 	}
-	briefingPath := ""
-	briefingBody := ""
 	launchMode := launchModeFromPlanFlag(cfg)
-	switch {
-	case launchMode == agent.ModePlan && agentName == "codex":
+	if launchMode == agent.ModePlan && cfg.Agent == "codex" {
 		planPrompt := briefing.RenderManualPlan(title, body)
-		if oversized {
-			briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
-			briefingBody = planPrompt
-			prompt = manualPromptWithBriefingAction(shortPrompt, briefingPath, "investigate, then propose a plan")
-		} else {
-			prompt = planPrompt
+		if !oversized {
+			return planPrompt, "", ""
 		}
-	case strings.Contains(prompt, "\n") || oversized:
-		briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
-		briefingBody = body
-		prompt = manualPromptWithBriefing(shortPrompt, briefingPath)
-	default:
-		prompt = shortPrompt
+		briefingPath := attachedBriefingPath(projectRoot, parentRef, target, number)
+		return manualPromptWithBriefingAction(
+			shortPrompt, briefingPath, "investigate, then propose a plan",
+		), briefingPath, planPrompt
 	}
+	if !strings.Contains(prompt, "\n") && !oversized {
+		return shortPrompt, "", ""
+	}
+	briefingPath := attachedBriefingPath(projectRoot, parentRef, target, number)
+	return manualPromptWithBriefing(shortPrompt, briefingPath), briefingPath, body
+}
 
-	req := Request{
-		ParentRef:           parentRef,
-		Number:              number,
-		Title:               title,
-		Body:                body,
-		ShortTitle:          ShortIssueTitle(title),
-		Slug:                slug,
-		DisplayNameOverride: title,
-		BranchName:          strings.TrimSpace(target.SourceBranchName),
-		Prompt:              prompt,
-		SourceParent:        parentRef,
-		SourceIssueNum:      target.SourceIssueNum,
-		SourceTaskID:        strings.TrimSpace(target.SourceTaskID),
-		Agent:               agentName,
-		Hooks:               hookConfig,
-		BriefingPath:        briefingPath,
-		BriefingBody:        briefingBody,
-		LaunchMode:          launchMode,
+func attachedIntentMatchesRequest(intent state.LaunchIntent, req Request) bool {
+	if intent.Launch != nil && intent.Launch.TokenIssued {
+		return true
 	}
-	if req.CodexPlanMode() {
-		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
+	if intent.RuntimeParent != ManualParentRef {
+		return false
 	}
-	return req
+	if intent.Launch == nil {
+		return true
+	}
+	launch := intent.Launch
+	if launch.Agent != req.Agent {
+		return false
+	}
+	if validateManagedTeamBinding(req, launch) != nil {
+		return false
+	}
+	spec, err := buildManagedLaunchSpec(req)
+	if err != nil {
+		return false
+	}
+	savedArgs, ok := attachedLaunchArgs(req.Agent, launch.Args)
+	if !ok {
+		return false
+	}
+	return launch.Executable == spec.Executable && slices.Equal(savedArgs, spec.Args)
+}
+
+func attachedLaunchArgs(agentName string, args []string) ([]string, bool) {
+	if agentName != "claude" {
+		return args, true
+	}
+	if len(args) < 2 || args[0] != "--settings" {
+		return nil, false
+	}
+	return args[2:], true
 }
 
 func attachedBriefingPath(projectRoot, parentRef string, target AttachTarget, number int) string {
@@ -429,6 +492,147 @@ func NextManagedSyntheticPaneNumber(projectRoot string, store state.Store, paren
 	return number
 }
 
+// ReclaimManagedSyntheticPaneNumber releases the first burned @manual number
+// that the current allocation scan can prove absent. Snapshot or persistence
+// failures leave every affected intent in place, so the unchanged allocator
+// skips those numbers as before.
+func ReclaimManagedSyntheticPaneNumber(
+	ctx context.Context,
+	projectRoot string,
+	locked *state.LockedStore,
+	parentRef string,
+	runtime ManagedLaunchRuntime,
+) {
+	if ctx == nil || runtime == nil {
+		return
+	}
+	journal, ownerRoot, candidates := managedSyntheticNumberRecovery(projectRoot, locked, parentRef)
+	if len(candidates) == 0 {
+		return
+	}
+	workspaces, err := runtime.ObserveWorkspaces(ctx)
+	if err != nil {
+		return
+	}
+	releaseReclaimableManualCoordinator(journal, ownerRoot, candidates, workspaces, runtime)
+}
+
+func managedSyntheticNumberRecovery(
+	projectRoot string,
+	locked *state.LockedStore,
+	parentRef string,
+) (*state.LockedLaunchJournal, string, []burnedManualCoordinator) {
+	if locked == nil {
+		return nil, "", nil
+	}
+	journal, err := locked.LaunchJournal(projectRoot)
+	if err != nil {
+		return nil, "", nil
+	}
+	ownerRoot, err := canonicalManualCoordinatorOwner(projectRoot)
+	if err != nil {
+		return nil, "", nil
+	}
+	candidates := burnedManualCoordinatorRun(
+		journal.LaunchJournal, ownerRoot, NextSyntheticPaneNumber(locked.Store, parentRef),
+	)
+	return journal, ownerRoot, candidates
+}
+
+func releaseReclaimableManualCoordinator(
+	journal *state.LockedLaunchJournal,
+	ownerRoot string,
+	candidates []burnedManualCoordinator,
+	workspaces []backend.WorkspaceObservation,
+	runtime ManagedLaunchRuntime,
+) {
+	for _, candidate := range candidates {
+		if manualCoordinatorNumberReleasable(candidate.intent, ownerRoot, candidate.number) &&
+			!realizedManagedRuntimePresent(workspaces, candidate.intent) &&
+			discardReclaimedManualEnvironment(runtime, candidate.intent) == nil &&
+			releaseManagedIntent(journal, candidate.intent.ID, nil) == nil {
+			return
+		}
+	}
+}
+
+func discardReclaimedManualEnvironment(
+	runtime ManagedLaunchRuntime,
+	intent state.LaunchIntent,
+) error {
+	if intent.Launch == nil {
+		return nil
+	}
+	route, err := runtime.LaunchRoute()
+	if err != nil {
+		return err
+	}
+	return runtime.DiscardWorkloadEnvironment(route.RuntimeDir, intent.Launch)
+}
+
+type burnedManualCoordinator struct {
+	intent state.LaunchIntent
+	number int
+}
+
+func burnedManualCoordinatorRun(
+	journal state.LaunchJournal,
+	ownerRoot string,
+	start int,
+) []burnedManualCoordinator {
+	var candidates []burnedManualCoordinator
+	for number := start; ; number-- {
+		intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
+		if !found || intent.Status != state.IntentManualCleanupRequired {
+			return candidates
+		}
+		candidates = append(candidates, burnedManualCoordinator{intent: intent, number: number})
+	}
+}
+
+// nextAttachedSyntheticPaneNumber picks a number unused by the source parent
+// or @manual rows, then checks the shared @manual coordinator intent namespace.
+// A recoverable intent is reused only for the same physical worktree; every
+// other collision is skipped.
+func nextAttachedSyntheticPaneNumber(
+	projectRoot string,
+	store state.Store,
+	parentRef string,
+	worktreePath string,
+) int {
+	number := NextSyntheticPaneNumber(store, parentRef)
+	number = nextAttachedRecordedBindingManualNumber(store, parentRef, number)
+	journal, ownerRoot := manualAllocationJournal(projectRoot)
+	worktreePath = canonicalAttachedAllocationPath(worktreePath)
+	for manualCoordinatorNumberUnavailable(
+		journal, ownerRoot, worktreePath, number,
+	) {
+		number--
+	}
+	return number
+}
+
+func canonicalAttachedAllocationPath(worktreePath string) string {
+	resolved, err := filepath.EvalSymlinks(worktreePath)
+	if err != nil {
+		return filepath.Clean(worktreePath)
+	}
+	return filepath.Clean(resolved)
+}
+
+func nextAttachedRecordedBindingManualNumber(store state.Store, parentRef string, number int) int {
+	if parentRef == ManualParentRef {
+		return number
+	}
+	for _, pane := range store.PanesForParent(ManualParentRef) {
+		if backend.LiveIdentityModelOf(pane.Backend) == backend.LiveIdentityRecordedBinding &&
+			pane.IssueNum <= number {
+			number = pane.IssueNum - 1
+		}
+	}
+	return number
+}
+
 // manualAllocationJournal loads the read-only journal view used to skip burned
 // manual numbers; an unreadable journal degrades to no skipping.
 func manualAllocationJournal(projectRoot string) (state.LaunchJournal, string) {
@@ -444,15 +648,48 @@ func manualAllocationJournal(projectRoot string) (state.LaunchJournal, string) {
 }
 
 func manualCoordinatorNumberBurned(journal state.LaunchJournal, ownerRoot string, number int) bool {
-	if ownerRoot == "" {
+	intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
+	return found && intent.Status == state.IntentManualCleanupRequired
+}
+
+func manualCoordinatorNumberUnavailable(
+	journal state.LaunchJournal,
+	ownerRoot, worktreePath string,
+	number int,
+) bool {
+	intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
+	if !found {
 		return false
+	}
+	return intent.Status == state.IntentManualCleanupRequired ||
+		intent.Kind != state.IntentCoordinator ||
+		intent.IssueNum != number ||
+		!savedManagedCoordinatorPathMatches(ownerRoot, intent.WorktreePath, worktreePath)
+}
+
+func manualCoordinatorIntent(
+	journal state.LaunchJournal,
+	ownerRoot string,
+	number int,
+) (state.LaunchIntent, bool) {
+	if ownerRoot == "" {
+		return state.LaunchIntent{}, false
 	}
 	intentID, err := state.CoordinatorIntentID(ManualParentRef, ownerRoot, number)
 	if err != nil {
-		return false
+		return state.LaunchIntent{}, false
 	}
-	intent, found := journal.FindIntent(intentID)
-	return found && intent.Status == state.IntentManualCleanupRequired
+	return journal.FindIntent(intentID)
+}
+
+func manualCoordinatorNumberReleasable(
+	intent state.LaunchIntent,
+	ownerRoot string,
+	number int,
+) bool {
+	return manualCleanupCoordinatorReleasable(intent) &&
+		intent.Parent == ManualParentRef && intent.OwnerProjectRoot == ownerRoot &&
+		intent.IssueNum == number
 }
 
 // canonicalManualCoordinatorOwner resolves the owner-root form used inside

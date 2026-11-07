@@ -156,12 +156,15 @@ func TestHerdrCodexPlanCaptureTargetRequiresExactLiveIdentity(t *testing.T) {
 }
 
 func TestBestEffortScreenCaptureDoesNotBlockController(t *testing.T) {
-	started := make(chan struct{}, 2)
-	finished := make(chan struct{}, 2)
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
 	capture := newBestEffortScreenCapture(25*time.Millisecond, func(ctx context.Context) (string, error) {
-		started <- struct{}{}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
 		<-ctx.Done()
-		finished <- struct{}{}
 		return "", ctx.Err()
 	})
 
@@ -169,17 +172,15 @@ func TestBestEffortScreenCaptureDoesNotBlockController(t *testing.T) {
 		t.Fatalf("initial capture error = %v, want pending", err)
 	}
 	<-started
-	before := time.Now()
+	// read is parked on release, so this capture can only return by not
+	// waiting for the worker.
 	if _, err := capture(); !errors.Is(err, errManagedCodexPlanCapturePending) {
 		t.Fatalf("busy capture error = %v, want cached pending", err)
 	}
-	if elapsed := time.Since(before); elapsed > 100*time.Millisecond {
-		t.Fatalf("busy capture blocked controller for %v", elapsed)
-	}
-	<-finished
-	if _, err := capture(); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("completed capture error = %v, want deadline", err)
-	}
+	close(release)
+	awaitBestEffortScreenCapture(t, capture, func(_ string, err error) bool {
+		return errors.Is(err, context.DeadlineExceeded)
+	})
 }
 
 func TestBestEffortScreenCaptureReturnsCacheDuringRefresh(t *testing.T) {
@@ -201,18 +202,9 @@ func TestBestEffortScreenCaptureReturnsCacheDuringRefresh(t *testing.T) {
 	if _, err := capture(); !errors.Is(err, errManagedCodexPlanCapturePending) {
 		t.Fatalf("initial capture error = %v, want pending", err)
 	}
-	deadline := time.After(time.Second)
-	for {
-		screen, err := capture()
-		if err == nil && screen == "approval viewport" {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("first screen was not cached")
-		case <-time.After(time.Millisecond):
-		}
-	}
+	awaitBestEffortScreenCapture(t, capture, func(screen string, err error) bool {
+		return err == nil && screen == "approval viewport"
+	})
 	<-secondStarted
 	before := time.Now()
 	screen, err := capture()
@@ -223,4 +215,23 @@ func TestBestEffortScreenCaptureReturnsCacheDuringRefresh(t *testing.T) {
 		t.Fatalf("cached capture blocked controller for %v", elapsed)
 	}
 	close(releaseSecond)
+}
+
+// awaitBestEffortScreenCapture polls capture until the worker has published a
+// result that satisfies ready. The worker stores its result only after read
+// returns, so a signal sent from inside read cannot stand in for this wait.
+func awaitBestEffortScreenCapture(
+	t *testing.T,
+	capture func() (string, error),
+	ready func(screen string, err error) bool,
+) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for !ready(capture()) {
+		select {
+		case <-deadline:
+			t.Fatal("best-effort screen capture never published the expected result")
+		case <-time.After(time.Millisecond):
+		}
+	}
 }

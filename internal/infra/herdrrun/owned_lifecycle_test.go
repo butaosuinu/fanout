@@ -205,6 +205,96 @@ func TestPrepareRestartedLauncherMigratesLegacyOwnedConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareRestartedLauncherRecoversPlainConfigWithOrphanDashboardDescriptor(t *testing.T) {
+	for _, previousLauncher := range []bool{false, true} {
+		name := "current launcher"
+		if previousLauncher {
+			name = "previous launcher"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			marker, found, err := readOwnerMarker(h.layout.markerPath)
+			if err != nil || !found {
+				t.Fatalf("read current marker = (%+v, %t, %v)", marker, found, err)
+			}
+			configLauncher := binaryAdmission{path: marker.LauncherPath, sha256: marker.LauncherSHA256}
+			if previousLauncher {
+				configLauncher = installLegacyOwnedLauncher(t, h)
+			}
+			descriptor := dashboardDescriptor{
+				SchemaID:   dashboardDescriptorSchemaID,
+				HelperPath: configLauncher.path, HelperSHA256: configLauncher.sha256,
+				DashboardPath: configLauncher.path, DashboardSHA256: configLauncher.sha256,
+				SessionID: h.session.Session, SocketPath: h.session.SocketPath,
+				Owners:      []dashboardOwner{{PaneID: "pane-1", WorkspaceID: "workspace-1", StatePath: state.Path(h.checkout)}},
+				Environment: []string{"PATH=/usr/bin"},
+			}
+			if writeErr := writeDashboardDescriptor(h.layout, descriptor); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			expected := inspectOwnedServerForTest(t, h)
+			commonDir, commonIdentity, err := openCanonicalGitCommonDir(h.commonDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admitted := binaryAdmission{
+				path: expected.BinaryPath, sha256: expected.BinarySHA256, version: expected.BinaryVersion,
+			}
+
+			pinned, err := prepareRestartedLauncher(expected, commonDir, commonIdentity, h.layout, admitted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validatePrivateContents(h.layout.configPath, ownedConfigContents(pinned.path)); err != nil {
+				t.Fatalf("plain config after restart preparation: %v", err)
+			}
+			if _, err := os.Lstat(h.layout.dashboardDescriptorPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("orphan dashboard descriptor remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestRestartOwnedPreservesDashboardShortcutConfig(t *testing.T) {
+	h := newOwnedHarness(t)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if slices.Equal(args, []string{"server", "reload-config"}) {
+			return []byte(appliedDashboardReloadEnvelope), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncErr := h.session.Backend().SyncDashboardShortcut(corebackend.DashboardShortcutOptions{
+		Enabled: true, FanoutBin: executable,
+		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
+		Environment: []string{"HOME=/home/operator", "PATH=/usr/bin"},
+	}); syncErr != nil {
+		t.Fatal(syncErr)
+	}
+	expected := inspectOwnedServerForTest(t, h)
+	saveOwnedServerIntent(t, h, state.IntentRestart, expected)
+	retireFakeSupervisorForRestart(t, h, false)
+	restarted, err := restartOwned(
+		context.Background(), h.ownedOptions(), expected, h.supervisor.start, h.session.backend,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, found, err := readDashboardDescriptor(h.layout)
+	if err != nil || !found {
+		t.Fatalf("dashboard descriptor after restart = (%+v, %t, %v)", descriptor, found, err)
+	}
+	expectedConfig := ownedDashboardConfigContents(
+		restarted.LauncherPath, descriptor.HelperPath, h.layout.dashboardDescriptorPath,
+	)
+	if err := validatePrivateContents(h.layout.configPath, expectedConfig); err != nil {
+		t.Fatalf("dashboard config after restart: %v", err)
+	}
+}
+
 func TestShutdownOwnedRejectsResourcesAndDoesNotSignalOnRetry(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)

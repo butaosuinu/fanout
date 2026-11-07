@@ -48,6 +48,21 @@ const (
 	CleanupWorkspaceClose CleanupPhase = "workspace-close"
 )
 
+type CleanupHookPhase string
+
+const (
+	CleanupHookPending                    CleanupHookPhase = "pending"
+	CleanupHookBeforeWorktreeRemoveIssued CleanupHookPhase = "before_worktree_remove_issued"
+	CleanupHookBeforeWorktreeRemove       CleanupHookPhase = "before_worktree_remove"
+	CleanupHookBeforePaneCloseIssued      CleanupHookPhase = "before_pane_close_issued"
+	CleanupHookBeforePaneClose            CleanupHookPhase = "before_pane_close"
+	CleanupHookPaneClosedIssued           CleanupHookPhase = "pane_closed_issued"
+	CleanupHookPaneClosed                 CleanupHookPhase = "pane_closed"
+	CleanupHookWorktreeRemovedIssued      CleanupHookPhase = "worktree_removed_issued"
+	CleanupHookWorktreeRemoved            CleanupHookPhase = "worktree_removed"
+	CleanupHookCompleted                  CleanupHookPhase = "completed"
+)
+
 type LaunchIntentStatus string
 
 const (
@@ -67,6 +82,27 @@ type RuntimeResource struct {
 	CurrentPath string `json:"currentPath"`
 	RepoKey     string `json:"repoKey,omitempty"`
 	RepoRoot    string `json:"repoRoot,omitempty"`
+}
+
+// RuntimeResourceFromObservation projects one workspace into canonical journal identity.
+func RuntimeResourceFromObservation(observation backend.WorkspaceObservation) RuntimeResource {
+	return RuntimeResource{
+		WorkspaceID: observation.WorkspaceID,
+		Label:       observation.Label,
+		PaneID:      observation.Pane.Pane,
+		TerminalID:  observation.TerminalID,
+		CurrentPath: CleanRuntimeResourcePath(observation.CWD),
+		RepoKey:     CleanRuntimeResourcePath(observation.RepoKey),
+		RepoRoot:    CleanRuntimeResourcePath(observation.RepoRoot),
+	}
+}
+
+// CleanRuntimeResourcePath preserves an absent path while normalizing a reported path.
+func CleanRuntimeResourcePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
 }
 
 // RuntimeServerIdentity is the persisted owner marker and supervisor lease
@@ -126,6 +162,14 @@ type LaunchIntent struct {
 
 	CleanupPhase        CleanupPhase `json:"cleanupPhase,omitempty"`
 	CleanupDeleteBranch bool         `json:"cleanupDeleteBranch,omitempty"`
+	// CleanupDeleteBranchRequested is nil only for intents saved before this field existed.
+	CleanupDeleteBranchRequested *bool `json:"cleanupDeleteBranchRequested,omitempty"`
+	// CleanupDeleteBranchVerified records use of the checkout-presence ownership rule.
+	CleanupDeleteBranchVerified bool `json:"cleanupDeleteBranchVerified,omitempty"`
+	// CleanupHookPhase is empty only for cleanup intents saved after both pre-cleanup hooks by an older fanout.
+	CleanupHookPhase CleanupHookPhase `json:"cleanupHookPhase,omitempty"`
+	// CleanupWorktreeRemovedRequired is nil only for cleanup intents saved before this field existed.
+	CleanupWorktreeRemovedRequired *bool `json:"cleanupWorktreeRemovedRequired,omitempty"`
 
 	Failure string `json:"failure,omitempty"`
 }
@@ -137,10 +181,12 @@ type LaunchCapsule struct {
 	Nonce                string                   `json:"nonce"`
 	EmitterNonce         string                   `json:"emitterNonce,omitempty"`
 	PendingReportedState string                   `json:"pendingReportedState,omitempty"`
+	PendingReportedSeq   uint64                   `json:"pendingReportedSequence,omitempty"`
 	PendingAgentSession  *backend.AgentSessionRef `json:"pendingAgentSession,omitempty"`
 	Agent                string                   `json:"agent"`
 	AgentName            string                   `json:"agentName"`
 	Executable           string                   `json:"executable"`
+	ConsoleShell         string                   `json:"consoleShell,omitempty"`
 	Args                 []string                 `json:"args"`
 	TeamDBPath           string                   `json:"teamDbPath,omitempty"`
 	CodexTeamStatusPath  string                   `json:"codexTeamStatusPath,omitempty"`
@@ -163,7 +209,8 @@ type LaunchJournal struct {
 // The view has no unlock of its own: the lock file is owned by the
 // LockedStore that produced it.
 type LockedLaunchJournal struct {
-	path string
+	path  string
+	store *LockedStore
 	LaunchJournal
 }
 
@@ -246,10 +293,63 @@ func (l *LockedLaunchJournal) Save() error {
 	if validateErr := validateLaunchJournal(l.LaunchJournal); validateErr != nil {
 		return validateErr
 	}
+	if l.hasSequencedClaudeLaunch() {
+		if fenceErr := l.fenceLegacyClaudeEmitters(); fenceErr != nil {
+			return fenceErr
+		}
+	}
 	if writeErr := atomicfs.WriteJSON(l.path, l.LaunchJournal, 0o600); writeErr != nil {
 		return fmt.Errorf("write Herdr intents %s: %w", l.path, writeErr)
 	}
 	return nil
+}
+
+func (l *LockedLaunchJournal) hasSequencedClaudeLaunch() bool {
+	for _, intent := range l.Intents {
+		if intent.Launch != nil && telemetry.SequencedClaudeLaunch(intent.Launch.Agent, intent.Launch.Args) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *LockedLaunchJournal) fenceLegacyClaudeEmitters() error {
+	if l.store == nil {
+		return fmt.Errorf("fence legacy Claude emitters without the combined launch lock")
+	}
+	changed, err := l.store.fenceUnsequencedClaudeEmitters()
+	if err != nil {
+		return err
+	}
+	if changed {
+		if err := l.store.Save(); err != nil {
+			return fmt.Errorf("persist legacy Claude emitter fence: %w", err)
+		}
+	}
+	return l.fenceUnsequencedClaudeIntents()
+}
+
+func (l *LockedLaunchJournal) fenceUnsequencedClaudeIntents() error {
+	for i := range l.Intents {
+		launch := l.Intents[i].Launch
+		if !legacyClaudeLaunch(launch) {
+			continue
+		}
+		nonce, err := newStateEmitterNonce()
+		if err != nil {
+			return err
+		}
+		launch.PendingReportedState = ""
+		launch.PendingReportedSeq = 0
+		launch.PendingAgentSession = nil
+		launch.EmitterNonce = nonce
+	}
+	return nil
+}
+
+func legacyClaudeLaunch(launch *LaunchCapsule) bool {
+	return launch != nil && launch.Agent == "claude" && telemetry.ValidNonce(launch.EmitterNonce) &&
+		!telemetry.SequencedClaudeLaunch(launch.Agent, launch.Args)
 }
 
 func (s LaunchJournal) FindIntent(id string) (LaunchIntent, bool) {
@@ -482,11 +582,36 @@ func loadLaunchJournal(path string) (LaunchJournal, error) {
 	if raw.Intents == nil {
 		return LaunchJournal{}, fmt.Errorf("validate Herdr intents %s: journal is missing intents", path)
 	}
-	store := LaunchJournal{SchemaVersion: raw.SchemaVersion, Intents: *raw.Intents}
+	store := migrateUnsequencedClaudeTelemetry(raw.SchemaVersion, *raw.Intents)
 	if err := validateLaunchJournal(store); err != nil {
 		return LaunchJournal{}, fmt.Errorf("validate Herdr intents %s: %w", path, err)
 	}
 	return store, nil
+}
+
+// Sequence was added to the v1 journal after pending Claude telemetry already
+// existed. Its absence is indistinguishable from malformed new telemetry, so
+// discard that non-authoritative snapshot instead of rejecting recovery.
+func migrateUnsequencedClaudeTelemetry(schemaVersion int, intents []LaunchIntent) LaunchJournal {
+	store := LaunchJournal{SchemaVersion: schemaVersion, Intents: intents}
+	for i := range intents {
+		launch := intents[i].Launch
+		if !validLegacyClaudePendingTelemetry(launch) {
+			continue
+		}
+		launch.PendingReportedState = ""
+		launch.PendingAgentSession = nil
+	}
+	return store
+}
+
+func validLegacyClaudePendingTelemetry(launch *LaunchCapsule) bool {
+	if launch == nil || launch.Agent != "claude" || launch.PendingReportedSeq != 0 ||
+		!telemetry.ValidNonce(launch.EmitterNonce) {
+		return false
+	}
+	providerState, ok := backend.ParseAgentState(launch.PendingReportedState)
+	return ok && providerState != backend.AgentRunning
 }
 
 func emptyLaunchJournal() LaunchJournal {
@@ -541,11 +666,8 @@ func validateIntent(intent LaunchIntent) error {
 	if IsServerLifecycleKind(intent.Kind) {
 		return validateServerIntent(intent)
 	}
-	if intent.Server != nil {
-		return fmt.Errorf("herdr intent %s has an unrelated server identity", intent.ID)
-	}
-	if intent.Kind != IntentResume && intent.ResumeAgentSession != nil {
-		return fmt.Errorf("herdr intent %s has an unrelated resume session", intent.ID)
+	if err := validateIntentKindIsolation(intent); err != nil {
+		return err
 	}
 	if err := validateIntentIdentity(intent); err != nil {
 		return err
@@ -560,6 +682,17 @@ func validateIntent(intent LaunchIntent) error {
 		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
 	}
 	return nil
+}
+
+func validateIntentKindIsolation(intent LaunchIntent) error {
+	switch {
+	case intent.Server != nil:
+		return fmt.Errorf("herdr intent %s has an unrelated server identity", intent.ID)
+	case intent.Kind != IntentResume && intent.ResumeAgentSession != nil:
+		return fmt.Errorf("herdr intent %s has an unrelated resume session", intent.ID)
+	default:
+		return nil
+	}
 }
 
 func validateServerIntent(intent LaunchIntent) error {
@@ -580,7 +713,10 @@ func validateServerIntent(intent LaunchIntent) error {
 		!intent.BranchCreated, intent.WorkspaceLabel == "", intent.Resource == (RuntimeResource{}),
 		intent.Coordinator == (RuntimeResource{}), intent.Session == "", intent.SocketPath == "",
 		intent.ExpiresUnixMS == 0, intent.Launch == nil, intent.CleanupPhase == "",
-		intent.ResumeAgentSession == nil, !intent.CleanupDeleteBranch, intent.Failure == "",
+		intent.ResumeAgentSession == nil, !intent.CleanupDeleteBranch,
+		intent.CleanupDeleteBranchRequested == nil, intent.CleanupHookPhase == "",
+		intent.CleanupWorktreeRemovedRequired == nil,
+		intent.Failure == "",
 	}
 	if slices.Contains(empty, false) {
 		return fmt.Errorf("herdr server lifecycle intent %s has unrelated fields", intent.ID)
@@ -652,7 +788,8 @@ func validateIntentKind(intent LaunchIntent) error {
 func validateCoordinatorFields(intent LaunchIntent) error {
 	return requireIntentFields(intent.Kind, []bool{
 		intent.TaskID == "", intent.BranchName == "", intent.FullBranchRef == "",
-		intent.BaseSHA == "", intent.Coordinator.WorkspaceID == "",
+		intent.BaseSHA == "", intent.Coordinator.WorkspaceID == "", intent.CleanupHookPhase == "",
+		intent.CleanupWorktreeRemovedRequired == nil,
 	})
 }
 
@@ -662,6 +799,7 @@ func validateWorktreeFields(intent LaunchIntent) error {
 		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
 		intent.BaseBranch != "", commitSHAPattern.MatchString(intent.BaseSHA),
 		commitSHAPattern.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+		intent.CleanupHookPhase == "", intent.CleanupWorktreeRemovedRequired == nil,
 	})
 }
 
@@ -672,6 +810,7 @@ func validateRollbackFields(intent LaunchIntent) error {
 		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
 		intent.BaseBranch != "", commitSHAPattern.MatchString(intent.BaseSHA),
 		commitSHAPattern.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+		intent.CleanupHookPhase == "", intent.CleanupWorktreeRemovedRequired == nil,
 	})
 }
 
@@ -688,6 +827,11 @@ func validateCleanupFields(intent LaunchIntent) error {
 		validPhases[intent.CleanupPhase],
 		intent.CleanupPhase != CleanupReopen || intent.Coordinator.WorkspaceID != "",
 		!intent.CleanupDeleteBranch || commitSHAPattern.MatchString(intent.ExpectedHead),
+		validCleanupHookPhase(intent.CleanupHookPhase),
+		!cleanupCompletionHookPhase(intent.CleanupHookPhase) || intent.Status == IntentRealized,
+		!cleanupCompletionHookPhase(intent.CleanupHookPhase) || intent.CleanupWorktreeRemovedRequired != nil,
+		!cleanupWorktreeRemovedHookPhase(intent.CleanupHookPhase) ||
+			intent.CleanupWorktreeRemovedRequired != nil && *intent.CleanupWorktreeRemovedRequired,
 	}); err != nil {
 		return err
 	}
@@ -695,6 +839,27 @@ func validateCleanupFields(intent LaunchIntent) error {
 		return validateRuntimeResource(intent.Coordinator, false)
 	}
 	return nil
+}
+
+func validCleanupHookPhase(phase CleanupHookPhase) bool {
+	return slices.Contains([]CleanupHookPhase{
+		"", CleanupHookPending,
+		CleanupHookBeforeWorktreeRemoveIssued, CleanupHookBeforeWorktreeRemove,
+		CleanupHookBeforePaneCloseIssued, CleanupHookBeforePaneClose,
+		CleanupHookPaneClosedIssued, CleanupHookPaneClosed,
+		CleanupHookWorktreeRemovedIssued, CleanupHookWorktreeRemoved,
+		CleanupHookCompleted,
+	}, phase)
+}
+
+func cleanupCompletionHookPhase(phase CleanupHookPhase) bool {
+	return phase == CleanupHookPaneClosedIssued || phase == CleanupHookPaneClosed ||
+		phase == CleanupHookWorktreeRemovedIssued || phase == CleanupHookWorktreeRemoved ||
+		phase == CleanupHookCompleted
+}
+
+func cleanupWorktreeRemovedHookPhase(phase CleanupHookPhase) bool {
+	return phase == CleanupHookWorktreeRemovedIssued || phase == CleanupHookWorktreeRemoved
 }
 
 func validateResumeFields(intent LaunchIntent) error {
@@ -708,7 +873,9 @@ func validateResumeFields(intent LaunchIntent) error {
 		intent.Resource.WorkspaceID != "", intent.Resource.PaneID != "",
 		intent.Resource.TerminalID != "", intent.Resource.CurrentPath != "",
 		intent.Coordinator == (RuntimeResource{}), intent.CleanupPhase == "",
-		!intent.CleanupDeleteBranch, intent.Server == nil,
+		!intent.CleanupDeleteBranch, intent.CleanupDeleteBranchRequested == nil,
+		intent.CleanupHookPhase == "", intent.CleanupWorktreeRemovedRequired == nil,
+		intent.Server == nil,
 	})
 }
 
@@ -810,6 +977,7 @@ func validateLaunch(intent LaunchIntent) error {
 		validCodexPaths(launch),
 		cleanAbsolute(launch.EnvFilePath),
 		launch.EnvNameCount > 0,
+		launch.ConsoleShell == "" || cleanAbsolute(launch.ConsoleShell),
 	}
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("launch fields are incomplete")
@@ -844,7 +1012,7 @@ func validateLaunchAgentIdentity(kind LaunchIntentKind, launch *LaunchCapsule) e
 
 func validateEmitter(launch *LaunchCapsule) error {
 	if launch.EmitterNonce == "" {
-		if launch.PendingReportedState != "" {
+		if launch.PendingReportedState != "" || launch.PendingReportedSeq != 0 {
 			return fmt.Errorf("pending telemetry requires an emitter nonce")
 		}
 		return nil
@@ -852,12 +1020,22 @@ func validateEmitter(launch *LaunchCapsule) error {
 	if !validEmitterAgent(launch) || !telemetry.ValidNonce(launch.EmitterNonce) {
 		return fmt.Errorf("emitter fields require a Claude or Codex Plan launch and valid nonce")
 	}
+	return validatePendingTelemetry(launch)
+}
+
+func validatePendingTelemetry(launch *LaunchCapsule) error {
 	if launch.PendingReportedState == "" {
+		if launch.PendingReportedSeq != 0 {
+			return fmt.Errorf("pending telemetry sequence requires a provider state")
+		}
 		return nil
 	}
 	state, ok := backend.ParseAgentState(launch.PendingReportedState)
 	if !ok || state == backend.AgentRunning {
 		return fmt.Errorf("pending telemetry has an invalid provider state")
+	}
+	if (launch.Agent == "claude") != (launch.PendingReportedSeq > 0) {
+		return fmt.Errorf("pending telemetry sequence does not match provider")
 	}
 	return nil
 }

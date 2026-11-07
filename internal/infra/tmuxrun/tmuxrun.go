@@ -1729,7 +1729,8 @@ func listClosePaneIdentity(paneID string, shellIdentity bool) ([]LivePane, error
 }
 
 func closePaneListOutput(format string) ([]byte, bool, error) {
-	cmd := exec.Command("tmux", "list-panes", "-a", "-F", format)
+	// Preserve TAB delimiters outside tmux while keeping diagnostics in C locale.
+	cmd := exec.Command("tmux", "-u", "list-panes", "-a", "-F", format)
 	cmd.Env = envWithCLocale(os.Environ())
 	out, err := cmd.Output()
 	if err == nil {

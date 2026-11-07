@@ -3,6 +3,8 @@ package state
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
@@ -70,14 +73,18 @@ type Pane struct {
 	// ReportedState is cooperative provider telemetry. The launch binding fields
 	// fence updates to one Herdr generation; none of these fields authorizes
 	// lifecycle, cleanup, completion, or nudge operations.
-	ReportedState     string   `json:"reported_state,omitempty"`
-	StateRefinement   bool     `json:"state_refinement,omitempty"`
-	EmitterRowKey     string   `json:"emitterRowKey,omitempty"`
-	LaunchNonce       string   `json:"launchNonce,omitempty"`
-	EmitterNonce      string   `json:"emitterNonce,omitempty"`
-	LaunchExecutable  string   `json:"herdrLaunchExecutable,omitempty"`
-	LaunchArgs        []string `json:"herdrLaunchArgs,omitempty"`
-	DirectAgentLaunch bool     `json:"herdrDirectAgentLaunch,omitempty"`
+	ReportedState         string   `json:"reported_state,omitempty"`
+	ReportedStateSeq      uint64   `json:"reported_state_sequence,omitempty"`
+	StateRefinement       bool     `json:"state_refinement,omitempty"`
+	EmitterRowKey         string   `json:"emitterRowKey,omitempty"`
+	LaunchNonce           string   `json:"launchNonce,omitempty"`
+	EmitterNonce          string   `json:"emitterNonce,omitempty"`
+	EmitterRebindNonce    string   `json:"emitterRebindNonce,omitempty"`
+	EmitterRebindSequence uint64   `json:"emitterRebindSequence,omitempty"`
+	LaunchExecutable      string   `json:"herdrLaunchExecutable,omitempty"`
+	LaunchArgs            []string `json:"herdrLaunchArgs,omitempty"`
+	DirectAgentLaunch     bool     `json:"herdrDirectAgentLaunch,omitempty"`
+	ConsoleShell          string   `json:"herdrConsoleShell,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.
@@ -338,6 +345,7 @@ func (l *LockedStore) LaunchJournal(projectRoot string) (*LockedLaunchJournal, e
 	}
 	return &LockedLaunchJournal{
 		path:          l.journalPath,
+		store:         l,
 		LaunchJournal: store,
 	}, nil
 }
@@ -355,8 +363,77 @@ func unlockStateFile(file *os.File) error {
 }
 
 func (l *LockedStore) RecordPane(p Pane) error {
+	if telemetry.SequencedClaudeLaunch(p.Agent, p.LaunchArgs) {
+		if _, err := l.fenceUnsequencedClaudeEmitters(); err != nil {
+			return err
+		}
+	}
 	l.UpsertTask(p)
 	return save(l.path, l.Store)
+}
+
+func (l *LockedStore) fenceUnsequencedClaudeEmitters() (bool, error) {
+	changed := false
+	for i := range l.Panes {
+		pane := &l.Panes[i]
+		if !legacyClaudeEmitter(*pane) {
+			continue
+		}
+		if err := pane.InvalidateTelemetry(); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	return changed, nil
+}
+
+// InvalidateTelemetry fences the current emitter generation and clears every
+// derived agent-state value until a fresh signal reaches this row.
+func (p *Pane) InvalidateTelemetry() error {
+	nonce, err := newStateEmitterNonce()
+	if err != nil {
+		return err
+	}
+	p.ReportedState = ""
+	p.ReportedStateSeq = 0
+	p.StateRefinement = false
+	p.EmitterNonce = nonce
+	p.EmitterRebindNonce = ""
+	p.EmitterRebindSequence = 0
+	return nil
+}
+
+// InvalidateTelemetryForLocationRebind fences nudge state while retaining the
+// launch emitter's old nonce as an explicit admission path for its fixed env.
+func (p *Pane) InvalidateTelemetryForLocationRebind(sequenceFence uint64) error {
+	if sequenceFence == 0 {
+		return fmt.Errorf("location rebind telemetry sequence fence is missing")
+	}
+	rebindNonce := p.EmitterRebindNonce
+	rebindSequence := max(p.EmitterRebindSequence, p.ReportedStateSeq, sequenceFence)
+	if rebindNonce == "" {
+		rebindNonce = p.EmitterNonce
+	}
+	if err := p.InvalidateTelemetry(); err != nil {
+		return err
+	}
+	p.EmitterRebindNonce = rebindNonce
+	p.EmitterRebindSequence = rebindSequence
+	return nil
+}
+
+func legacyClaudeEmitter(pane Pane) bool {
+	return pane.Backend == backend.Herdr && pane.Agent == "claude" &&
+		telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce) &&
+		!telemetry.SequencedClaudeLaunch(pane.Agent, pane.LaunchArgs)
+}
+
+func newStateEmitterNonce() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("rotate legacy telemetry emitter nonce: %w", err)
+	}
+	return hex.EncodeToString(value), nil
 }
 
 func (l *LockedStore) RemovePane(parent string, issueNum int) error {
@@ -437,6 +514,26 @@ func (s Store) PanesForParent(parent string) []Pane {
 		}
 	}
 	return out
+}
+
+// EmitterRowIndex resolves one final telemetry row from its launch row key and
+// the repository-wide path identity already persisted on every agent row. The
+// Herdr workspace label distinguishes separate agents attached to one path.
+func (s Store) EmitterRowIndex(rowKey, worktreePath, workspaceLabel string) (int, error) {
+	index := -1
+	for i := range s.Panes {
+		pane := s.Panes[i]
+		if pane.EmitterRowKey != rowKey ||
+			filepath.Clean(pane.WorktreePath) != worktreePath ||
+			pane.WorkspaceLabel != workspaceLabel {
+			continue
+		}
+		if index >= 0 {
+			return -1, fmt.Errorf("multiple final rows match emitter stable identity")
+		}
+		index = i
+	}
+	return index, nil
 }
 
 func (s *Store) Upsert(p Pane) {

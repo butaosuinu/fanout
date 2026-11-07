@@ -21,6 +21,8 @@ import {
   rowKey,
 } from "./pane";
 import { COLS, type SortDir } from "./sort";
+import { stackOf } from "./stack";
+import { useStackIndex } from "./StackIndex";
 import type { PaneView, PRRef, Rollup } from "../../transport/types";
 import {
   AgentStateTag,
@@ -31,6 +33,7 @@ import {
   PrConflictTag,
   PrPill,
   PrReviewTag,
+  StackTag,
 } from "./badges";
 import { GhLink, Tag } from "../../ui/Tag";
 
@@ -55,10 +58,12 @@ function CiCell({ ci }: { ci: string }) {
  * ので、重複せずに approved の有無が一覧からも消えない。タグはリンクの外に置く —
  * 中に入れるとリンクの accessible name に混ざる。 */
 function PrCell({ repo, pr }: { repo: string; pr: PRRef | null }) {
+  const stacks = useStackIndex();
   if (!pr) return <span className="muted">—</span>;
   return (
     <span className="pr-cell">
       <PrPill repo={repo} pr={pr} />
+      <StackTag stack={stackOf(pr, stacks)} />
       <PrReviewTag pr={pr} />
       <PrConflictTag pr={pr} />
       <PrCommentsTag pr={pr} />

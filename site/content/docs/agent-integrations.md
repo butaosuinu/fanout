@@ -74,9 +74,9 @@ Say the implementation is done and you want one more look before committing or o
 
 ## Codex CLI
 
-Codex installs five repo-managed skills under `~/.codex/skills/` (see [Installation]({{< relref "/docs/installation" >}})). Each skill keeps its main decision flow in `SKILL.md` and loads bundled references or scripts only when needed.
+Codex installs six repo-managed skills under `~/.codex/skills/` (see [Installation]({{< relref "/docs/installation" >}})). Each skill keeps its main decision flow in `SKILL.md` and loads bundled references or scripts only when needed.
 
-Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as Claude's `/fanout` — dry-run, confirm targets, then run. `fanout-issues`, `fanout-plan`, `post-work-review`, and `pr-watch` are also bundled as Codex versions; invoke them as `$fanout-issues` or `$pr-watch`, and they play the same role as the Claude versions.
+Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as Claude's `/fanout` — dry-run, confirm targets, then run. `fanout-issues`, `fanout-plan`, `post-work-review`, `pr-watch`, and `session-retro` are also bundled as Codex versions; invoke them as `$fanout-issues`, `$pr-watch`, or `$session-retro`, and they play the same role as the Claude versions.
 
 ### The `$post-work-review` gate
 

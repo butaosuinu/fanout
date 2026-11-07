@@ -19,12 +19,18 @@ v0.8.0 以降は Apache-2.0、0.7.x は AGPL-3.0 + 商用のデュアルライ�
 CLI launch では、fanout がリポジトリの owned session を起動または再採用し、プロジェクトルートの coordinator workspace と子ごとの worktree workspace を作ります。
 選択した agent は pin 済みの non-login fanout launcher から起動されます。
 launcher は operation-bound token を 1 回だけ受け取り、所有者だけが読める environment capsule を 1 回だけ消費して、shell を介さず agent に置き換わります。
-direct claude と direct Codex には公式 session report に必要な owned socket と exact pane ID だけを渡し、session / workspace route は渡しません。
+Claude workload には、公式 session report に必要な owned socket と exact pane ID を渡します。
+direct / attached Codex workload には exact pane ID と、起動した process の終了まで `pane.report_agent_session` だけを受理する所有者専用 relay socket を渡します。
+どちらにも session / workspace route は渡しません。
 fanout は launch の検証後に限り、workspace、pane、terminal、repository、agent、session、socket の identity を `.fanout/state.json` へ保存します。
 インストール済みの herdr integration が provider session の identity を報告した場合は、その値も保存します。
 
-owned session は自分の `config.toml` を固定します。既定 shell は fanout の launcher(non-login)、herdr の復元時 agent resume は off、herdr の update manifest check も off です。
+owned session は自分の `config.toml` を固定します。既定 shell は fanout の launcher(non-login)、herdr の復元時 agent resume は off、herdr の update manifest check も off です。`dashboardKeybind` が有効なら、focus 中の pane から web ダッシュボードを開く Herdr の `F12` shell command も登録します。
 fanout の知らないところで agent が起動し直されることはありません。resume は後述の明示操作だけです。
+
+`gh` の認証に `GH_TOKEN` または `GITHUB_TOKEN` を使う場合は、その変数を持つ shell から owned session を作成してください。
+fanout は token を内部 control-plane 名で owned server へ渡し、ownership marker には SHA-256 fingerprint だけを保存します。`config.toml` と dashboard descriptor に token の値は書きません。
+live server が現在の token を継承していない場合は F12 keybind を削除します。子の行を close または cleanup し、`fanout herdr shutdown` を実行してから、token を持つ shell で再起動してください。
 
 常駐 TUI コンソール、`--status`、web ダッシュボードには、記録済み session と各 pane の runtime backend、identity が表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。
@@ -52,8 +58,37 @@ fanout は保存済みの workspace ID、label、terminal、repository、path、
 cleanup intent を保存してから non-force の `herdr worktree remove` を発行し、checkout と workspace の不在を確認します。workspace だけが残れば close します。
 先に workspace が閉じられて checkout が残った場合は、owned plugin registry が空であることを確認してから削除用 workspace を再登録します。
 
-fanout は remove の発行前に、tracked / untracked の作業と ignored file を区別します。
-どちらが残っていても herdr mutation を発行せず、原因を分けて表示します。再試行時は checkout を再検査します。
+内容物の検査で停止し、再登録した cleanup shell が残っている場合は、残存ファイルを保全・解消して同じ close または cleanup を再試行してください。
+保存済みの再登録先について、owned route、workspace、唯一の pane、terminal、checkout を照合します。元 agent がその shell で動いている必要はありません。
+再登録先に追加の pane または agent があれば cleanup を停止します。
+
+child を close すると、その checkout に attach した agent を先に閉じてから worktree を削除します。
+state lock 内で保存済み source child と各 attached launch を照合します。
+runtime parent や Git provenance が空の旧 attached row も、この保存済み identity が一致すれば回復できます。pane や workspace を手動で閉じた後も同じです。
+証跡が不足または矛盾する場合は cleanup を停止し、path の一致だけでは許可しません。
+state row を残して同じ close コマンドを再試行してください。結果不明の close や hook は再送しません。
+
+checkout を持たない console / coordinator workspace を close する前に、照合済み pane だけが残っていることを確認します。
+補助 pane が残る場合は manual cleanup とします。
+通常の `workspace close` が同じ repository group の別 workspace まで閉じる場合も発行しません。
+close 前の snapshot に失敗した場合は workspace を変更しません。close 後の確認 snapshot に失敗した場合は、close の結果を確定できないまま error を返します。
+
+専用 coordinator を持つ plan の task を閉じたら `fanout plan <slug> --cleanup` を実行してください。
+その plan の task 行が 0 件になると、pending intent を保存し、tokenless launcher を pinned executable、argv、作業 directory、foreground process group と照合します。
+agent や追加 pane / process がなければ、その launcher に EOF（`ctrl+d`）を 1 回送ります。
+Herdr が終了した workspace だけを除去し、fanout は不在を確認してから state 行と intent を退役します。
+repo root の metadata が付いていても退役できます。GitHub issue と共有する coordinator は保持します。
+
+EOF の応答を失った場合は cleanup を再実行して消滅を確認します。
+workspace が残っていれば EOF を再送せず、manual cleanup とします。
+残る作業を保全し、保存済み launcher の identity を照合してから手動で終了してください。
+同じ repository の別 Session を残す必要がある間は、root workspace に `workspace close` / `pane close` を実行しないでください。Herdr 0.8.2 では両方とも repository group を閉じる場合があります。
+対象が消えたら cleanup を再実行し、記録を退役します。
+ほかの resource もなくなれば `fanout herdr shutdown` で server を停止できます。
+
+fanout は remove の発行前に、tracked の変更や非 ignored の untracked file と ignored file を区別します。
+tracked の変更または非 ignored の untracked file が残る場合は、herdr mutation を発行せず停止します。
+ignored file だけなら `git -c clean.requireForce=true clean -fdX` で除去し、削除件数を記録してから remove へ進みます。ファイルが残る場合は削除を停止します。再試行時は checkout を再検査します。
 `dirty_worktree_requires_force` で manual cleanup になった保存済み intent は、現在の checkout と workspace から再計画するため、変更を commit または削除したあとに続行できます（[#721](https://github.com/butaosuinu/fanout/issues/721)）。
 発行結果が曖昧な intent は再発行せず、manual cleanup のまま保持します。
 branch は fanout-created と記録されたものだけを compare-and-delete します。
@@ -67,11 +102,11 @@ git -C "<worktree>" status --short --untracked-files=all --ignored
 ```
 
 tracked の作業は commit または stash し、untracked file は commit または別の場所へ退避してから再試行してください。
-ignored file だけなら、削除対象を確認してから ignored file だけを削除します。
+ignored file は自動で除去します。cleanup 後も残る場合は、内容を確認してから手動で削除してください。
 
 ```bash
-git -C "<worktree>" clean -ndX
-git -C "<worktree>" clean -fdX
+git -C "<worktree>" -c clean.requireForce=true clean -ndX
+git -C "<worktree>" -c clean.requireForce=true clean -fdX
 ```
 
 ignored ディレクトリ内に別の Git repository がある場合は、`-f` を 2 回指定しないとそのディレクトリをスキップします。
@@ -96,10 +131,10 @@ herdr workspace close <workspace-id>
 
 - 対話 send、restore、plan capture は herdr 行では使えません。
 - TUI の focus、attached-agent / shell launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。新規 Session の `n` だけは例外で、foreign または `default` の console から Prompt、Issue、plan の作業を repository-owned session へ投入できます。form を開くか cancel しただけでは何も作りません。submit 後は最初に作成した terminal へ直接 attach し、detach すると同じ TUI に戻ります。attach に失敗しても、作成済みの pane と state 行は残します。
-- focus はさらに agent session を保存済みの行だけで通ります。session を報告するのは agent integration なので、`herdr integration install claude` / `codex` を入れていない環境では focus が拒否されます。integration を入れても通らない行が 3 種類あります。attach で起動した agent ([#732](https://github.com/butaosuinu/fanout/issues/732))、Codex の Plan Mode と team (workload が provider ではなく fanout の controller)、OpenCode です。いずれも socket 系の環境変数を渡さないので hook が session を報告できません。
+- focus はさらに agent session を保存済みの行だけで通ります。session を報告するのは agent integration なので、`herdr integration install claude` / `codex` を入れていない環境では focus が拒否されます。attached Claude / Codex は integration route を受け取り、session を報告できます。Codex の Plan Mode と team は workload が provider ではなく fanout の controller なので拒否されます。OpenCode もこの launch path では integration 用 socket を渡さないため拒否されます。
 - 同じ provider が同じ pane で新しい会話を始めると (claude の `/clear`、codex の `/new`)、herdr は conversation を差し替え、agent record の名前も落とします。行が保存した conversation はそちらへ追随し、落ちた名前は fanout が付け直すので、focus、peek、`--close`、`--cleanup` は前後で使えたままです。別の provider の conversation、runtime が発行していない ref、他の名前を名乗っている agent record は従来どおり拒否します。
 - Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。Claude と OpenCode は固有の mode flag を使います。
-- tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
+- Herdr に登録するのはダッシュボード用の direct `F12` command だけです。tmux 専用の `prefix + D`、`prefix + M`、コンソール復帰 keybind、herdr のアプリ内通知 `notification show` は使いません。
 
 TUI のヘッダには、選択された backend とその理由が常に表示されます。例: `backend: herdr (HERDR_ENV)`。
 
@@ -196,7 +231,7 @@ owned モデルへ移る手順は次のとおりです。
 | `--team` peer messaging | SQLite registry、Claude watcher、Codex app-server bridge | 同じ registry と push lane |
 | `--merge` / `--close` / `--cleanup`、TUI merge / close / cleanup | 対応 | fanout-owned 行の identity を検証して実行。dirty checkout は force しない |
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | current launch に束縛された refined telemetry と live identity/process の照合後に no-wait の `agent prompt` を 1 回発行。それ以外は no-op |
-| tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
+| global keybind | ダッシュボード用 `F12` / `prefix + D`、worktree 操作用 `prefix + M`、コンソール復帰 | fanout-owned Herdr config にダッシュボード用 `F12` だけ登録 |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
 | 子の Plan Mode launch | 対応 | 対応。Codex は fanout の app-server controller、Claude / OpenCode は固有の mode flag を使う |
 | TUI フォーム(設定、ヘルプ) | tmux popup | インラインの in-process フォーム |
@@ -206,6 +241,10 @@ owned モデルへ移る手順は次のとおりです。
 値の欠落、重複、不一致、検証不能では行を `stale` のまま残します。
 Claude、OpenCode、Codex Plan / Team controller、TUI で既存 worktree に attach した Codex はこの経路で resume しません。
 復元直後の shell placeholder が `idle` と表示されても、process の生存や完了を示しません。
+
+live launch と `restart` の試行前には、exact な live pane が報告する direct Codex の `agent_session` を保存値へ反映します。
+headless 運用で `/new` を実行した後も、このどちらかの経路が owned server を観測できれば新しい conversation を保存します。
+どちらの経路より先に owned server が観測不能になると、新しい session は復元できず、後の restart でも行を `stale` のまま残します。
 
 herdr は exit status を残さず、正常終了で pane の記録も消します。
 終了した agent は `✓ done` の pane を残さずに herdr session から消え、記録済みの fanout 行は `stale` と表示されます。
@@ -223,6 +262,18 @@ fanout herdr shutdown   # 空の owned server を停止する
 その後は新しい世代を起動し、旧版の fanout が書いた owned `config.toml` を置き換え、記録済みの行を上記のルールで再束縛します。
 失敗した後にどちらの verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
 
+`restart` が成功したら、herdr backend を選択した状態で引数なしの `fanout` を実行して console を開きます。
+復元された launcher を照合し、既存 pane 上で新しい console launch を開始します。terminal ID の一致だけでは TUI を ready と判定しません。
+稼働中の TUI と終了時に引き継いだ shell は再利用し、linked worktree 間でも console は 1 つを共有します。
+shell は起動時の値を保存するため、別の `$SHELL` からも再接続できます。console の shell 内で `fanout` を実行すると、所有権を確認して pinned binary で TUI を開き直します。
+launcher が既に消えていれば、通常の stale 行の退役と bootstrap に進みます。
+別 process、追加 pane、server 操作の pending、未発行 launch の期限切れでは token を送らず復旧を停止します。manual shell の自動再開はしません。
+
+console launch の token 応答を失った場合や結果の保存に失敗した場合は、引数なしの `fanout` を再実行してください。
+期限切れ後も workload と環境 capsule の消費を確認し、token は再送しません。
+結果を確認できなければ停止したままにします。journal を保持し、保存済み pane を調べてから手動で片づけてください。
+別 Session を残す必要がある間は root workspace を close しないでください。
+
 fanout の更新後に launch が `owned Herdr launcher predates the current fanout` で拒否されたら、子の行を `--close` / `--cleanup` で片づけ、console の TUI を quit してそのシェルを終了し、coordinator の shell も終了してから `fanout herdr shutdown` を実行します。
 `restart` は生存世代を置き換えません。`shutdown` が空の session と古い足場行を畳み、次の launch が現行 launcher を使う新世代を作ります。
 
@@ -231,7 +282,10 @@ fanout-created branch が残っていれば保存済み base SHA と一致する
 snapshot の取得失敗、同じ label の workspace、残存 checkout、移動した branch、branch の観測失敗のいずれかがあれば intent を残して拒否します。
 
 `shutdown` は空の server を retire します。子の herdr 行がこのリポジトリの state に残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、剪定できない herdr intent が保留中の間は拒否します。
-素のシェルからの TUI bootstrap が記録する console 行と、issue / Project / plan のファンアウトが記録するプロジェクトルートの coordinator 行は、workspace が 1 つも残っていないことを確認した後に `shutdown` 自身が削除します。動作中の shell は先に終了してください。
+保存行が owned session / socket と一致し、workspace が 1 つも残っていないことを確認した後に、`shutdown` 自身が console / coordinator / manual shell 行を削除します。
+manual shell は正規の `@manual` / `shell` role で、runtime parent と agent / checkout identity が空の行だけが対象です。attached / manual-agent 行は引き続き shutdown を拒否します。
+退役直前にも owner store の lock 下で保存行を再照合します。
+journal が空の古い shell 行も回収し、開始 directory とファイルは削除しません。動作中の shell は先に終了してください。
 
 ## sidebar token
 
@@ -270,7 +324,10 @@ fanout-owned session の中では token を `herdr api snapshot` で読めます
 fanout はこれを代行しません。agent 設定の所有者はあなたです。
 任意の手順ですが、TUI の focus は claude / codex の行でこの hook が報告する session に依存します(herdr 自身の session 復元も同じ session を使います)。
 
-fanout は claude / codex の workload に `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` だけを渡すので、hook は owned session の socket に届きます。session と workspace の route は渡しません。
+fanout は Claude / Codex の workload に `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` を渡します。
+Claude の `HERDR_SOCKET_PATH` は owned socket を指します。
+Codex の `HERDR_SOCKET_PATH` は、検証済みの `pane.report_agent_session` だけを転送し、起動した process とともに閉じる `0600` の relay を指します。
+session と workspace の route は launcher に残します。
 hook 自体はあなたの agent 設定側にあり、owned session の XDG 隔離の外なので置き換えは不要です。
 
 fanout-owned session は herdr の XDG directory を隔離し、workspace / worktree 作成前に plugin registry が空であることを要求します。

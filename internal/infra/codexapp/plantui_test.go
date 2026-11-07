@@ -451,13 +451,14 @@ func TestWaitForCodexTUIAfterReadyReturnsTUIExit(t *testing.T) {
 func TestWaitForCodexTUIAfterReadyIgnoresDrainErrorAfterReady(t *testing.T) {
 	tuiDone := make(chan error, 1)
 	drainDone := make(chan error, 1)
+	states := make(chan string, 1)
 	drainDone <- errors.New("unsupported request")
 	resultDone := make(chan struct {
 		tuiExited bool
 		err       error
 	}, 1)
 	go func() {
-		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, true, false)
+		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, func(s string) { states <- s }, nil, true, false)
 		resultDone <- struct {
 			tuiExited bool
 			err       error
@@ -477,6 +478,11 @@ func TestWaitForCodexTUIAfterReadyIgnoresDrainErrorAfterReady(t *testing.T) {
 	}
 	if result.err != nil {
 		t.Fatalf("error = %v, want nil", result.err)
+	}
+	select {
+	case state := <-states:
+		t.Fatalf("observer failure reported %q without a turn completion", state)
+	default:
 	}
 }
 

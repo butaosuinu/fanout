@@ -11,9 +11,11 @@ The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent
 
 ## What it does
 
-For a CLI launch, fanout starts or readopts its repository-owned herdr session, creates one project-root coordinator workspace, creates a worktree workspace per child, and starts the selected agent through a pinned non-login fanout launcher. The launcher receives one operation-bound token, consumes an owner-only environment capsule once, and replaces itself with the agent without invoking a shell. Direct Claude and direct Codex receive the owned socket and exact pane ID their official session report needs, but not the session or workspace route. fanout records the exact workspace, pane, terminal, repository, agent, session, and socket identities in `.fanout/state.json` only after the launch is verified. It also records the provider session identity when the installed herdr integration reports one.
+For a CLI launch, fanout starts or readopts its repository-owned herdr session, creates one project-root coordinator workspace, creates a worktree workspace per child, and starts the selected agent through a pinned non-login fanout launcher. The launcher receives one operation-bound token, consumes an owner-only environment capsule once, and replaces itself with the agent without invoking a shell. Claude provider workloads receive the owned socket and exact pane ID their official session report needs. Direct and attached Codex workloads instead receive the exact pane ID and an owner-only relay socket that lasts for the launched process and accepts only `pane.report_agent_session`. Neither receives the session or workspace route. fanout records the exact workspace, pane, terminal, repository, agent, session, and socket identities in `.fanout/state.json` only after the launch is verified. It also records the provider session identity when the installed herdr integration reports one.
 
-The owned session pins its own `config.toml`: fanout's launcher as the non-login default shell, herdr's restore-time agent resume off, and herdr's update manifest check off. Nothing restarts an agent behind fanout's back — resume is the explicit path below.
+The owned session pins its own `config.toml`: fanout's launcher as the non-login default shell, herdr's restore-time agent resume off, and herdr's update manifest check off. When `dashboardKeybind` is enabled, it also registers a Herdr `F12` shell command that opens the web dashboard from the focused pane. Nothing restarts an agent behind fanout's back — resume is the explicit path below.
+
+If `gh` authentication comes from `GH_TOKEN` or `GITHUB_TOKEN`, create the owned session from a shell that has the variable. fanout passes the token to the owned server under an internal control-plane name; it writes only its SHA-256 fingerprint to the ownership marker and keeps the value out of `config.toml` and the dashboard descriptor. If a live server did not inherit the current token, fanout removes the F12 binding. Close or clean up its rows, run `fanout herdr shutdown`, then relaunch from a shell with the token.
 
 The persistent TUI console, `--status`, and the web dashboard show recorded sessions with each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and web dashboard match herdr rows against `herdr api snapshot`; `--status` reads recorded state and GitHub only. Inside the owned console, the TUI can launch issue, Prompt, attached-agent, and shell panes, focus them, and peek at their output. The dashboard can peek at owned rows without adding a mutation endpoint. Before reading or mutating a session, fanout checks `herdr --version`, the exact owned route, and the saved workspace ownership label. A failed public method returns `herdr method "<name>" is unavailable`.
 
@@ -23,7 +25,17 @@ The TUI console and web dashboard use `reported_state` only while the matching p
 
 `--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight.
 
-Before issuing the removal, fanout separates tracked or untracked work from ignored files. Either state stops cleanup without issuing a herdr mutation; the error says which state blocked it. Retry checks the checkout again. A saved manual-cleanup intent whose failure was `dirty_worktree_requires_force` is replanned from the current checkout and workspace state, so committing or removing the files unblocks it ([#721](https://github.com/butaosuinu/fanout/issues/721)). An ambiguous issued mutation remains manual and is never replayed. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
+If the re-registered cleanup shell remains after a content check fails, preserve or resolve the remaining files and retry the same close or cleanup command. Retry verifies the saved replacement shell's owned route, workspace, sole pane, terminal, and checkout; it does not require the original agent to run in that shell. An extra pane or any agent in the replacement shell stops cleanup.
+
+Closing a child also closes agents attached to its checkout before removing the worktree. fanout verifies the saved source child and each attached launch under the state lock. Older attached rows with empty runtime parent or Git provenance can recover through these saved identities, including after their pane or workspace was closed manually. Missing or conflicting evidence stops cleanup; a matching path alone is insufficient. Keep the state rows and retry the same close command. An uncertain close or hook is not sent again.
+
+Before closing a checkout-free console or coordinator workspace, fanout requires the admitted pane to be its only pane. A remaining auxiliary pane requires manual cleanup. A generic `workspace close` is also refused when it would close another workspace in the same repository group. A failed preflight snapshot leaves the workspace unchanged; a failed post-close verification snapshot returns an error with the close result unknown.
+
+For a plan with its own coordinator, run `fanout plan <slug> --cleanup` after closing the plan's tasks. Once no task rows remain, cleanup saves a pending intent and checks the tokenless launcher's pinned executable, argv, working directory, and foreground process group. With no agent or additional pane or process present, it sends one EOF (`ctrl+d`). Herdr removes only that workspace; fanout confirms its absence before retiring its state row and intent. Repository-root metadata does not prevent retirement. Coordinators shared with a GitHub issue remain recorded.
+
+If EOF's response is lost, rerun cleanup to confirm absence. A workspace still present requires manual cleanup without resending EOF. Preserve remaining work and verify the saved launcher identity before ending it manually. Do not use `workspace close` or `pane close` on a root workspace while other Sessions in the repository must remain alive; both can close the repository group on Herdr 0.8.2. Once the target disappears, rerun cleanup to retire its records. Then `fanout herdr shutdown` can stop the server once its other resources are gone.
+
+Before issuing the removal, fanout separates tracked changes or non-ignored untracked files from ignored files. Tracked changes and non-ignored untracked files stop cleanup without issuing a herdr mutation. An ignored-only checkout proceeds after `git -c clean.requireForce=true clean -fdX` removes the ignored files; fanout logs the number removed. Any remaining files stop removal. Retry checks the checkout again. A saved manual-cleanup intent whose failure was `dirty_worktree_requires_force` is replanned from the current checkout and workspace state, so committing or removing the files unblocks it ([#721](https://github.com/butaosuinu/fanout/issues/721)). An ambiguous issued mutation remains manual and is never replayed. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
 
 ### Recover a blocked cleanup
 
@@ -33,11 +45,11 @@ Use the worktree path from the cleanup error to inspect what remains:
 git -C "<worktree>" status --short --untracked-files=all --ignored
 ```
 
-Commit or stash tracked work before retrying. Commit untracked files or copy them elsewhere. If only ignored files remain, preview and then remove only ignored files:
+Commit or stash tracked work before retrying. Commit untracked files or copy them elsewhere. Ignored files are removed automatically. If ignored files remain after cleanup, inspect them before removing them manually:
 
 ```bash
-git -C "<worktree>" clean -ndX
-git -C "<worktree>" clean -fdX
+git -C "<worktree>" -c clean.requireForce=true clean -ndX
+git -C "<worktree>" -c clean.requireForce=true clean -fdX
 ```
 
 An ignored directory that contains an embedded Git repository is skipped unless `-f` is specified twice. To delete it, inspect the directory first, then run `git -C "<worktree>" clean -ffdX` or remove the directory directly. `-ff` deletes the embedded repository and all of its contents.
@@ -57,10 +69,10 @@ The unsupported paths fail closed with a clear error.
 
 - Interactive send, restore, and plan capture remain unavailable for herdr rows.
 - TUI focus, attached-agent / shell launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason. The new-session `n` form is the only exception: it can submit Prompt, Issue, or plan work to the repository-owned session from a foreign or `default` console. Opening or cancelling the form creates nothing. After submit, fanout attaches the first created terminal directly; detaching returns to the same TUI. An attach failure does not remove the created panes or state rows.
-- Focus additionally needs a saved agent session. Only the agent integration reports one, so focus is refused until `herdr integration install claude` / `codex` is in place. Three kinds of row stay refused even with it installed: agents started with attach ([#732](https://github.com/butaosuinu/fanout/issues/732)), Codex Plan Mode and team (their workload is fanout's controller, not the provider), and OpenCode. None of them receive the socket environment the hook needs.
+- Focus additionally needs a saved agent session. Only the agent integration reports one, so focus is refused until `herdr integration install claude` / `codex` is in place. Attached Claude and Codex receive the integration route and can report a session. Codex Plan Mode and team stay refused because their workload is fanout's controller, not the provider; OpenCode stays refused because this launch path does not grant its integration a socket.
 - When a provider starts a new conversation in the same pane (Claude's `/clear`, Codex's `/new`), herdr replaces the conversation and also drops the agent record's name. The row's recorded conversation follows the new one, and fanout re-asserts the name it minted, so focus, peek, `--close`, and `--cleanup` keep working across it. A conversation from a different provider, a reference the runtime did not issue, and an agent record already answering to another name are all refused as before.
 - Codex child Plan Mode runs through fanout's app-server controller and owned launcher. Claude and OpenCode keep their native mode flags.
-- No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
+- Herdr registers only the dashboard's direct `F12` command. The tmux-only `prefix + D`, `prefix + M`, console-return bindings, and in-app `notification show` remain unavailable.
 
 The TUI header always shows the selected backend and why it was selected, such as `backend: herdr (HERDR_ENV)`.
 
@@ -141,13 +153,15 @@ v0.13.0's herdr backend was observation-only: you started a named herdr session 
 | `--team` peer messaging | SQLite registry, Claude watcher, Codex app-server bridge | Same registry and push lanes |
 | `--merge`, `--close`, `--cleanup`; TUI merge / close / cleanup | Supported | Supported for verified fanout-owned rows; cleanup never forces a dirty checkout |
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | One no-wait `agent prompt` after fresh refined telemetry and live identity/process checks; otherwise no-op |
-| tmux keybindings (dashboard, console return) | Registered | Not registered |
+| Global keybindings | `F12` / `prefix + D` dashboard, `prefix + M` worktree action, console return | `F12` dashboard only, through the fanout-owned Herdr config |
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |
 | Child Plan Mode launch | Supported | Supported; Codex uses fanout's app-server controller, while Claude / OpenCode use native flags |
 | TUI forms (settings, help) | tmux popups | Inline in-process forms |
 | Session resume | fanout's restore flow | An explicit `fanout herdr restart` resumes an exactly verified direct Codex session; every other provider or incomplete binding stays `stale` |
 
 An explicit `fanout herdr restart` re-binds a direct Codex row only when the restored shell placeholder has the exact saved `agent_session` and the launched process matches the saved absolute executable, `codex resume <session-id>` argv, cwd, ancestry, and foreground process group. Missing, duplicate, mismatched, or unverifiable data leaves the row `stale`; Claude, OpenCode, Codex Plan / Team controllers, and a Codex attached to an existing worktree from the TUI are never resumed by this path. An `idle` placeholder does not prove process liveness or completion.
+
+Before a live launch or a `restart` attempt, fanout refreshes a direct Codex row's saved `agent_session` from its exact live pane. This persists a conversation selected with `/new` in headless use. If the owned server becomes unobservable before either path runs, fanout cannot recover the new session; a later restart keeps the row `stale`.
 
 Because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind; the recorded fanout row stays and shows `stale`.
 
@@ -162,11 +176,17 @@ fanout herdr shutdown   # stop an empty owned server
 
 `restart` is for a server that died. fanout replaces it only after proving the old supervisor process and its sockets are gone — a generation that is still running refuses with `herdr owned server generation is still live` — then starts a fresh one, replaces an owned `config.toml` written by an older fanout, and re-binds the recorded rows under the rules above. Rerunning either verb after a failure is safe: fanout records what it set out to do and confirms that outcome rather than repeating the work.
 
+After `restart` succeeds, run bare `fanout` with the herdr backend selected to reopen the console. A restored, verified launcher receives a fresh console launch on its existing pane; a matching terminal ID alone does not mean the TUI is ready. A running TUI or its hand-off shell is reused, and linked worktrees still share one console. A launcher that has already disappeared follows normal stale-row cleanup and bootstrap. Other processes, additional panes, pending server operations, and expired unissued launches block recovery without receiving a token. Manual shells are not automatically resumed.
+
+The console records its hand-off shell at launch, so callers with a different `$SHELL` can reconnect. Running `fanout` inside that shell checks ownership and reopens the TUI with the pinned binary.
+
+If a console launch loses its token response or fails to save its result, rerun bare `fanout`. It verifies the workload and consumed environment capsule without sending the token again, including after the launch deadline. An unverified outcome remains blocked; preserve the journal and inspect the saved pane before manual cleanup. Do not close a root workspace while other Sessions must remain alive.
+
 After a fanout update, a launch may refuse with `owned Herdr launcher predates the current fanout`. Remove child rows with `--close` / `--cleanup`, quit the console TUI and exit its shell along with any coordinator shells, then run `fanout herdr shutdown`. `restart` still does not replace a live generation; `shutdown` folds the empty session and its stale scaffold rows so the next launch can create a generation with the current launcher.
 
 `shutdown` also recovers a `realized` intent left by a failed launch. It prunes the intent only when an owned-workspace snapshot has no workspace with the recorded label; worktree and resume intents additionally require the checkout to be absent. If a fanout-created branch remains, shutdown compare-and-deletes it only at the saved base SHA before pruning the intent. A failed snapshot, a matching workspace, a remaining checkout, a moved branch, or a branch observation failure keeps the intent and refuses shutdown.
 
-`shutdown` retires an empty server. It refuses while a child herdr row remains in this repository's state — every linked worktree counts — while the owned session still holds a workspace, or while an unprunable herdr intent is pending. After proving the workspace snapshot is empty, shutdown removes the console row recorded by a plain-shell TUI bootstrap and the project-root coordinator rows recorded by issue, Project, and plan fan-outs. Exit any running shell first.
+`shutdown` retires an empty server. It refuses while a child herdr row remains in this repository's state — every linked worktree counts — while the owned session still holds a workspace, or while an unprunable herdr intent is pending. After matching the saved rows to the owned session and socket and proving the workspace snapshot is empty, shutdown removes console, coordinator, and manual-shell rows. Manual shells must have the original `@manual` / `shell` role with no runtime parent or agent/checkout identity; attached and manual-agent rows still block shutdown. The owner store is checked again under its lock before retirement. This also recovers stale shell rows with an empty journal, without deleting their starting directories or files. Exit any running shell first.
 
 ## Sidebar tokens
 
@@ -198,7 +218,7 @@ A fanout-owned session pins its own `config.toml`, so this example applies to a 
 
 `herdr integration install claude` / `codex` writes hooks into your agent configuration that report the agent's session identity to herdr, which is what makes herdr's session tracking and restore work. fanout never runs it for you — your agent configuration stays yours. It is optional, but TUI focus on a Claude or Codex row depends on the session those hooks report, as does herdr's own session restore.
 
-fanout passes `HERDR_ENV`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` to Claude and Codex workloads so the hook reaches the owned socket; the session and workspace route stay with the launcher. The hook itself lives in your own agent configuration, outside the owned session's XDG isolation, so it needs no relocation.
+fanout passes `HERDR_ENV`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` to Claude and Codex workloads. For Claude, `HERDR_SOCKET_PATH` names the owned socket. For Codex, it names a `0600` relay that forwards only validated `pane.report_agent_session` requests and closes with the launched process. The session and workspace route stay with the launcher. The hook itself lives in your own agent configuration, outside the owned session's XDG isolation, so it needs no relocation.
 
 fanout-owned sessions isolate herdr's XDG directories and require an empty plugin registry before creating a workspace or worktree. Herdr notification and worktree-setup plugins do not run for fanout-owned launches. A non-empty registry makes the launch fail before mutation; use fanout's notification channels and hooks for those launches.
 

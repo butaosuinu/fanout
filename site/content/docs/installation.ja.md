@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # 配置先や Release tag を指定
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.17.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.18.0 sh
 ```
 
 `install.sh` は OS/arch を自動判定し、最新 Release(または `FANOUT_VERSION` で指定した tag)から `fanout` バイナリと Claude/Codex 連携ファイルを取得して配置します。
@@ -51,7 +51,7 @@ custom destination を使う場合は両方に同じ path を指定します。
 - `$BIN_DIR/fanout`(バイナリ本体)
 - `$CLAUDE_DIR/commands/`(`fanout`、`pr-watch`、`session-retro` のスラッシュコマンド)
 - `$CLAUDE_DIR/skills/`(`fanout`、`fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch`、`session-retro` の skill)
-- `$CODEX_DIR/skills/`(`session-retro` を除く同じ skill 群。`post-work-review` の marker helper も skill 内に同梱)
+- `$CODEX_DIR/skills/`(同じ 6 個の skill。`post-work-review` の marker helper も skill 内に同梱)
 
 install と update はこれらすべてを上書きします。
 
@@ -97,7 +97,7 @@ checkout の Makefile は Codex の `post-work-review` package を配置、置�
 `CODEX_DIR` または実効 `CODEX_HOME` に旧 driver が残る場合、`make install` と `make link` は binary の置換前に停止するので、release installer で旧 driver を移行してください。
 gate を変更する branch は trusted checkout または人がレビューしてください。
 
-ビルドには Go ツールチェイン(Go 1.26.6+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
+ビルドには Go ツールチェイン(Go 1.26.10+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
 curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。
 
 ## 更新を保つ

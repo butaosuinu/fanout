@@ -380,6 +380,81 @@ func TestCodexTeamInitialPromptMarksManualCheckpointsRead(t *testing.T) {
 	}
 }
 
+func TestTeamBridgeResumeRequiresKnownIdleSnapshot(t *testing.T) {
+	for _, test := range []struct {
+		name, snapshot, state string
+		idle                  bool
+	}{
+		{"idle", `{"type":"idle"}`, "idle", true},
+		{"active", `{"type":"active","activeFlags":[]}`, "working", false},
+		{"approval", `{"type":"active","activeFlags":["waitingOnApproval"]}`, "blocked", false},
+		{"input", `{"type":"active","activeFlags":["waitingOnUserInput"]}`, "blocked", false},
+		{"unknown", `{}`, "working", false},
+		{"not-loaded", `{"type":"notLoaded"}`, "working", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Unix(600, 0)
+			fetches := 0
+			client := newFakeTeamAppClient()
+			bridge := newTestTeamBridge(client, &now, func() ([]InboundMessage, error) {
+				fetches++
+				return []InboundMessage{{Line: "[fanout msg #60] batch"}}, nil
+			})
+			var state string
+			bridge.setAgentState = func(s string) { state = s }
+			bridge.handleMessage(appServerMessage{Method: "thread/started", Params: json.RawMessage(`{"thread":{"id":"thread-1","status":` + test.snapshot + `,"turns":[]}}`)})
+			if state != test.state {
+				t.Fatalf("state = %q, want %q", state, test.state)
+			}
+			bridge.poll()
+			if fetches != 0 {
+				t.Fatal("fetched before grace")
+			}
+			now = now.Add(bridge.idleGrace)
+			bridge.poll()
+			bridge.poll()
+			want := 0
+			if test.idle {
+				want = 1
+			}
+			if fetches != want || len(client.sent) != want {
+				t.Fatalf("fetches=%d sends=%d, want %d", fetches, len(client.sent), want)
+			}
+		})
+	}
+}
+
+func TestTeamBridgeResumeTracksActiveTurnAndApprovalResolution(t *testing.T) {
+	now := time.Unix(700, 0)
+	fetches := 0
+	bridge := newTestTeamBridge(newFakeTeamAppClient(), &now, func() ([]InboundMessage, error) { fetches++; return nil, nil })
+	var state string
+	bridge.setAgentState = func(s string) { state = s }
+	bridge.handleMessage(appServerMessage{Method: "thread/started", Params: json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":["waitingOnApproval"]},"turns":[{"id":"current","status":"inProgress"}]}}`)})
+	bridge.handleMessage(teamTurnCompletedMessage("other-thread", "current", "completed"))
+	bridge.handleMessage(teamTurnCompletedMessage("thread-1", "old", "completed"))
+	bridge.poll()
+	if fetches != 0 || bridge.activeTurnID != "current" || state != "blocked" {
+		t.Fatalf("premature resume: fetches=%d active=%q state=%q", fetches, bridge.activeTurnID, state)
+	}
+	bridge.handleMessage(appServerMessage{Method: "thread/status/changed", Params: json.RawMessage(`{"threadId":"thread-1","status":{"type":"active","activeFlags":[]}}`)})
+	if state != "working" {
+		t.Fatalf("state after approval = %q", state)
+	}
+	bridge.poll()
+	if fetches != 0 {
+		t.Fatal("fetched during resumed turn")
+	}
+	bridge.handleMessage(teamTurnCompletedMessage("thread-1", "current", "interrupted"))
+	completed := now
+	now = now.Add(bridge.idleGrace)
+	bridge.handleMessage(teamTurnCompletedMessage("thread-1", "current", "interrupted"))
+	bridge.poll()
+	if fetches != 1 || !bridge.lastTurnCompleted.Equal(completed) || state != "idle" {
+		t.Fatalf("duplicate completion changed idle gate: fetches=%d completed=%v state=%q", fetches, bridge.lastTurnCompleted, state)
+	}
+}
+
 func TestTeamMessagePromptQuotesEveryInputLine(t *testing.T) {
 	prompt := formatTeamMessagePrompt([]InboundMessage{{Line: "[fanout msg #51] first\nsecond"}})
 	if !strings.Contains(prompt, "> [fanout msg #51] first\n> second") {

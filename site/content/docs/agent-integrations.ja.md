@@ -94,12 +94,12 @@ PR を作ったあとの追従には `~/.claude/commands/pr-watch.md` と `~/.cl
 
 ## Codex CLI
 
-Codex には repo 管理の skill 5 個を `~/.codex/skills/` 配下へインストールします([インストール]({{< relref "/docs/installation" >}}) を参照)。
+Codex には repo 管理の skill 6 個を `~/.codex/skills/` 配下へインストールします([インストール]({{< relref "/docs/installation" >}}) を参照)。
 各 skill は主な判断手順を `SKILL.md` に置き、必要なときだけ同梱の reference や script を読み込みます。
 
 fanout skill は「#123 を fan out して」のように依頼するか、明示的に `$fanout` を指定すると起動します。
 Claude の `/fanout` と同じ安全フロー(dry-run → ターゲット確認 → 本実行)をたどります。
-`fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch` も Codex 版として同梱されており、`$fanout-issues` や `$pr-watch` のように呼び出すと Claude 版と同じ役割を果たします。
+`fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch`、`session-retro` も Codex 版として同梱されており、`$fanout-issues`、`$pr-watch`、`$session-retro` のように呼び出すと Claude 版と同じ役割を果たします。
 
 ### `$post-work-review` ゲート
 

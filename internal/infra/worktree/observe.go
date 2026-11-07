@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/core/errs"
 )
 
 var commitSHAPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -304,6 +306,35 @@ func ObserveCheckoutContentState(ctx context.Context, checkoutPath string) (Chec
 		return CheckoutIgnoredOnly, nil
 	}
 	return CheckoutClean, nil
+}
+
+// CleanIgnoredFiles removes ignored files after the caller has verified checkout
+// identity and cleanliness. Embedded repositories are left for manual cleanup.
+func CleanIgnoredFiles(ctx context.Context, checkoutPath string) (_ int, err error) {
+	defer errs.Wrap(&err, "clean ignored files at %s", checkoutPath)
+	args := []string{"ls-files", "--others", "--ignored", "--exclude-standard", "-z"}
+	before, err := gitStdout(ctx, checkoutPath, args...)
+	if err != nil {
+		return 0, err
+	}
+	// Keep -f single-force even when user config disables clean.requireForce.
+	_, cleanErr := gitStdout(ctx, checkoutPath, "-c", "clean.requireForce=true", "clean", "-fdX")
+	after, err := gitStdout(ctx, checkoutPath, args...)
+	if err != nil {
+		return 0, errors.Join(cleanErr, err)
+	}
+	removed := strings.Count(string(before), "\x00") - strings.Count(string(after), "\x00")
+	if cleanErr != nil {
+		return removed, cleanErr
+	}
+	content, err := ObserveCheckoutContentState(ctx, checkoutPath)
+	if err != nil {
+		return removed, err
+	}
+	if content != CheckoutClean {
+		return removed, fmt.Errorf("checkout still contains %s files after git clean -fdX; inspect them before retrying cleanup", content)
+	}
+	return removed, nil
 }
 
 func VerifyCheckout(

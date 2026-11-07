@@ -46,9 +46,9 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動くダッシュボード(ライブ更新)。PR が
-  紐付いた Session にはマージボタンが出ます。どのペインからでも `F12` または
-  `prefix + D` でポップできます。記録済みペインからの同一 worktree 操作は
-  `prefix + M` で開きます。
+  紐付いた Session にはマージボタンが出ます。tmux ではどのペインからでも `F12`
+  または `prefix + D`、fanout-owned Herdr pane では `F12` で開きます。tmux の
+  記録済みペインからの同一 worktree 操作は `prefix + M` で開きます。
 - **状態確認とレポート** — `--status` の JSON / table で PR review・CI 状態を
   確認でき、任意で親 issue にダッシュボードコメントを投稿します。
 - **Lifecycle hook** — user config に書いた shell command を worktree、pane、
@@ -183,6 +183,7 @@ watcher は repo 全体から label 付き issue を探し、one-shot session �
 | `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・数字ジャンプ 1-9・focus・zoom・peek・幅 80 桁未満のコンパクト switcher(`v`)・terminal・prompt / issue からの Session 起動・設定 popup (`s`)・同一 worktree への追加・復元・lifecycle キー) |
 | `fanout 123 --status` | ペイン・PR review・CI 状態を JSON または table で |
 | `fanout dashboard --web` | localhost で Web ダッシュボードを配信(PR のマージと、そのリモートブランチの削除以外は読み取り専用) |
+| `fanout dashboard --list` | 登録済みの稼働中ダッシュボードを repo 横断で列挙(token は表示しない) |
 | `fanout 123 --merge 4` | 子 branch を fast-forward merge(`--close` / `--cleanup` でペインを畳む) |
 
 ファンアウト系のコマンドは子の agent が必要です — `--agent claude` / `--agent codex` /
@@ -203,7 +204,7 @@ flag を生成します。詳しくは
 
 ## 開発要件
 
-チェックアウトからビルドする場合は Go 1.26.6+、Node.js 24+、pnpm 11+ が
+チェックアウトからビルドする場合は Go 1.26.10+、Node.js 24+、pnpm 11+ が
 必要です(curl インストールはビルド済みバイナリを配るのでいずれも不要)。
 
 ## 開発

@@ -276,6 +276,68 @@ func TestRealizeManagedWorktreeReopensVerifiedRealizedCheckout(t *testing.T) {
 	}
 }
 
+func TestRealizeManagedWorktreeHealsRestartedTerminalIdentity(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	runtime := &fakeManagedRealizeRuntime{}
+	installSuccessfulManagedMutations(t, repo, runtime)
+	hooks := deterministicManagedRealizeHooks()
+	coordinator := realizeTestManagedCoordinator(t, repo, runtime, hooks)
+	req := testManagedWorktreeRequest(repo, "restart-heal", 654)
+	realized, err := realizeManagedWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	runtime.workspaces[0].TerminalID += "-restarted"
+	restartedCoordinator, err := realizeManagedCoordinator(
+		context.Background(), testManagedCoordinatorRequest(repo), runtime, hooks,
+	)
+	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) ||
+		restartedCoordinator.Intent.Resource.TerminalID == coordinator.Resource.TerminalID {
+		t.Fatalf("coordinator restart recovery = %+v, err=%v", restartedCoordinator, err)
+	}
+	restartedTerminal := realized.Intent.Resource.TerminalID + "-restarted"
+	runtime.workspaces[1].TerminalID = restartedTerminal
+	runtime.workspaces[1].Panes = []backend.WorkspacePaneObservation{{
+		Pane: runtime.workspaces[1].Pane, TerminalID: restartedTerminal, CWD: runtime.workspaces[1].CWD,
+	}}
+
+	recovered, err := realizeManagedWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) ||
+		recovered.Intent.Status != state.IntentRealized ||
+		recovered.Intent.Resource.TerminalID != restartedTerminal ||
+		recovered.Intent.Coordinator != restartedCoordinator.Intent.Resource {
+		t.Fatalf("restart recovery = %+v, err=%v", recovered, err)
+	}
+	saved := requireManagedWorktreeIntent(t, repo, req)
+	if saved.Resource != recovered.Intent.Resource || saved.Coordinator != recovered.Intent.Coordinator {
+		t.Fatalf("saved restart intent = %+v, want %+v", saved, recovered.Intent)
+	}
+}
+
+func TestRealizeManagedWorktreeRejectsRestartedProvenanceMismatch(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	runtime := &fakeManagedRealizeRuntime{}
+	installSuccessfulManagedMutations(t, repo, runtime)
+	hooks := deterministicManagedRealizeHooks()
+	realizeTestManagedCoordinator(t, repo, runtime, hooks)
+	req := testManagedWorktreeRequest(repo, "restart-mismatch", 655)
+	realized, err := realizeManagedWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	runtime.workspaces[1].TerminalID += "-restarted"
+	runtime.workspaces[1].RepoKey = "/foreign/.git"
+
+	_, err = realizeManagedWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrManualCleanupRequired) {
+		t.Fatalf("mismatched restart recovery error = %v, want manual cleanup", err)
+	}
+	saved := requireManagedWorktreeIntent(t, repo, req)
+	if saved.Status != state.IntentManualCleanupRequired || saved.Resource != realized.Intent.Resource {
+		t.Fatalf("mismatched restart intent = %+v", saved)
+	}
+}
+
 func TestRealizeManagedWorktreeKeepsRejectedOpenRetryable(t *testing.T) {
 	repo := newManagedRealizeRepo(t)
 	runtime := &fakeManagedRealizeRuntime{}
@@ -442,21 +504,27 @@ func TestRealizeManagedWorktreeUsesSavedRouteDeadline(t *testing.T) {
 	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
 		t.Fatalf("initial realization error = %v", err)
 	}
+	// The route context is context.WithDeadline on the wall clock, while
+	// hooks.Now is frozen at fixture creation, so the saved deadline must be
+	// measured from time.Now. It sits below the classification cap so that it
+	// is the tighter bound the route inherits.
+	var savedDeadline time.Time
 	mutateManagedTestIntent(t, repo, realized.Intent.ID, func(intent *state.LaunchIntent) {
-		intent.ExpiresUnixMS = hooks.Now().Add(2 * time.Second).UnixMilli()
+		budget := maxManagedRecoveryClassificationTimeout - time.Second
+		intent.ExpiresUnixMS = time.Now().Add(budget).UnixMilli()
+		savedDeadline = time.UnixMilli(intent.ExpiresUnixMS)
 	})
 
 	_, err = realizeManagedWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
 		t.Fatalf("saved-deadline retry error = %v", err)
 	}
-	remaining := time.Until(runtime.routeDeadline)
-	if !runtime.routeHasDeadline || remaining <= 0 || remaining > 2*time.Second {
+	if !runtime.routeHasDeadline || !runtime.routeDeadline.Equal(savedDeadline) {
 		t.Fatalf(
-			"saved route deadline = %v, %t (remaining %v)",
+			"saved route deadline = %v, %t, want %v",
 			runtime.routeDeadline,
 			runtime.routeHasDeadline,
-			remaining,
+			savedDeadline,
 		)
 	}
 }
@@ -816,6 +884,110 @@ func TestWorkspaceHasManagedResourceMatchesSavedRootAmongMultiplePanes(t *testin
 	observation.Panes = observation.Panes[1:]
 	if workspaceHasManagedResource(observation, expected) {
 		t.Fatal("workspace without the saved root pane was accepted")
+	}
+}
+
+func TestWorkspaceHasManagedResourceCleansMultiPaneCWD(t *testing.T) {
+	expected := state.RuntimeResource{
+		WorkspaceID: "w1", Label: "fanout-coordinator-token", PaneID: "w1:p1",
+		TerminalID: "term-1", CurrentPath: "/repo/worktree/.",
+		RepoKey: "/repo/worktree/../.git", RepoRoot: "/repo/.",
+	}
+	observation := backend.WorkspaceObservation{
+		WorkspaceID: expected.WorkspaceID, Label: expected.Label,
+		RepoKey: "/repo/.git", RepoRoot: "/repo",
+		Panes: []backend.WorkspacePaneObservation{
+			{
+				Pane: backend.PaneRef{
+					Backend: backend.Herdr, Workspace: expected.WorkspaceID, Pane: expected.PaneID,
+				},
+				TerminalID: expected.TerminalID, CWD: "/repo/./worktree",
+			},
+			{
+				Pane: backend.PaneRef{
+					Backend: backend.Herdr, Workspace: expected.WorkspaceID, Pane: "w1:p2",
+				},
+				TerminalID: "term-2", CWD: "/repo/other",
+			},
+		},
+	}
+	if !workspaceHasManagedResource(observation, expected) {
+		t.Fatal("dot-segment pane path did not match the saved resource")
+	}
+}
+
+func TestRestartedManagedWorktreeResourceRequiresExactIdentity(t *testing.T) {
+	expected := state.RuntimeResource{
+		WorkspaceID: "w1", Label: "fanout-worktree-token", PaneID: "w1:p1",
+		TerminalID: "term-old", CurrentPath: "/repo/child",
+		RepoKey: "/repo/.git", RepoRoot: "/repo",
+	}
+	restarted := observationResource(expected)
+	restarted.Path = expected.CurrentPath
+	restarted.TerminalID = "term-new"
+	restarted.Panes = []backend.WorkspacePaneObservation{{
+		Pane: restarted.Pane, TerminalID: restarted.TerminalID, CWD: restarted.CWD,
+	}}
+	healed, found := restartedManagedWorktreeResource(restarted, expected)
+	if !found || healed.TerminalID != restarted.TerminalID {
+		t.Fatalf("exact restarted resource = (%+v, %t)", healed, found)
+	}
+	tests := map[string]func(*backend.WorkspaceObservation){
+		"workspace label":    func(observation *backend.WorkspaceObservation) { observation.Label = "foreign" },
+		"checkout path":      func(observation *backend.WorkspaceObservation) { observation.Path = "/repo/other" },
+		"repository key":     func(observation *backend.WorkspaceObservation) { observation.RepoKey = "/foreign/.git" },
+		"repository root":    func(observation *backend.WorkspaceObservation) { observation.RepoRoot = "/foreign" },
+		"pane identity":      func(observation *backend.WorkspaceObservation) { observation.Panes[0].Pane.Pane = "w1:p2" },
+		"current path":       func(observation *backend.WorkspaceObservation) { observation.Panes[0].CWD = "/repo/other" },
+		"unchanged terminal": func(observation *backend.WorkspaceObservation) { observation.Panes[0].TerminalID = expected.TerminalID },
+		"ambiguous pane": func(observation *backend.WorkspaceObservation) {
+			observation.Panes = append(observation.Panes, observation.Panes[0])
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			observation := restarted
+			observation.Panes = append([]backend.WorkspacePaneObservation(nil), restarted.Panes...)
+			mutate(&observation)
+			if got, ok := restartedManagedWorktreeResource(observation, expected); ok {
+				t.Fatalf("mismatched restarted resource = %+v", got)
+			}
+		})
+	}
+	missingProvenance := expected
+	missingProvenance.RepoKey = ""
+	if got, ok := restartedManagedWorktreeResource(restarted, missingProvenance); ok {
+		t.Fatalf("unknown saved provenance = %+v", got)
+	}
+}
+
+func TestRestartedManagedCoordinatorResourceRequiresTerminalOnlyChange(t *testing.T) {
+	expected := state.RuntimeResource{
+		WorkspaceID: "w1", Label: "fanout-coordinator-token", PaneID: "w1:p1",
+		TerminalID: "term-old", CurrentPath: "/repo",
+	}
+	current := expected
+	current.TerminalID = "term-new"
+	healed, found := restartedManagedCoordinatorResource(current, expected)
+	if !found || healed != current {
+		t.Fatalf("restarted coordinator = (%+v, %t), want %+v", healed, found, current)
+	}
+	workspaceMismatch := current
+	workspaceMismatch.WorkspaceID = "w2"
+	for name, candidate := range map[string]state.RuntimeResource{
+		"unchanged terminal": expected,
+		"workspace mismatch": workspaceMismatch,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := restartedManagedCoordinatorResource(candidate, expected); ok {
+				t.Fatalf("non-terminal coordinator change = %+v", got)
+			}
+		})
+	}
+	missingOldTerminal := expected
+	missingOldTerminal.TerminalID = ""
+	if got, ok := restartedManagedCoordinatorResource(current, missingOldTerminal); ok {
+		t.Fatalf("unknown saved coordinator identity = %+v", got)
 	}
 }
 

@@ -12,12 +12,14 @@ import {
 import {
   makeDiffResponse,
   makePane,
+  makePr,
   makeQueuedPane,
   makeRollup,
   makeSession,
   makeSnapshot,
 } from "./fixtures";
 import { server } from "./server";
+import type { PRRef } from "../transport/types";
 
 /* App 全体の統合テスト。モックはネットワーク境界のみ:
  * - /api/snapshot, /api/peek → MSW handler
@@ -294,6 +296,176 @@ describe("snapshot 描画", () => {
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
     expect(within(drawer).queryByText("conflict")).not.toBeInTheDocument();
     expect(within(drawer).queryByText(/💬/)).not.toBeInTheDocument();
+  });
+
+  it("native stack の層位置を pr 列に、stack map をドロワーに出す", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "stack output"));
+    const slim = (number: number, over: Partial<PRRef> = {}): PRRef => ({
+      number,
+      state: "OPEN",
+      mergedAt: null,
+      ...over,
+    });
+    const entries = [
+      { position: 1, pr: slim(843, { state: "MERGED", mergedAt: "2026-09-01T00:00:00Z" }) },
+      { position: 2, pr: slim(844) },
+      { position: 3, pr: slim(845) },
+    ];
+    const stack = (position: number) => ({
+      number: 12,
+      size: 3,
+      baseRef: "main",
+      position,
+      entries,
+    });
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("150", [
+          makePane({
+            issueNum: 151,
+            displayName: "Layer two",
+            prs: [
+              makePr({ number: 844, ci: "pass", stack: stack(2) }),
+              makePr({ number: 839, state: "CLOSED", headRef: "fanout/old-try" }),
+            ],
+          }),
+          makePane({
+            issueNum: 152,
+            displayName: "Layer three",
+            prs: [makePr({ number: 845, stack: stack(3) })],
+          }),
+        ]),
+      ]),
+    );
+
+    const row = screen.getByText("Layer two").closest("tr")!;
+    // バッジはピルのリンクの外 — リンク名に混ざらない
+    expect(within(row).getByRole("link", { name: "#844 open" })).toBeInTheDocument();
+    expect(within(row).getByText("⧉ 2/3")).toHaveAttribute(
+      "title",
+      "stack #12 · 3 層中 2 層目 → main",
+    );
+    const other = screen.getByText("Layer three").closest("tr")!;
+    expect(within(other).getByText("⧉ 3/3")).toBeInTheDocument();
+
+    await user.click(within(row).getByText("Layer two"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    const map = within(drawer).getByText("stack #12 → main · 3 層").closest("li")!;
+    const layers = within(map).getAllByRole("listitem");
+    // 上の層ほど上。自分の層は行のコピーで描くので CI も付く
+    expect(layers.map((li) => li.firstChild?.textContent)).toEqual(["3", "2", "1"]);
+    expect(within(layers[0]!).getByText("Layer three")).toBeInTheDocument();
+    expect(layers[1]).toHaveAttribute("aria-current", "true");
+    expect(within(layers[1]!).getByText("◀ この Session")).toBeInTheDocument();
+    expect(within(layers[1]!).getByText("ci pass", { selector: ".tag" })).toBeInTheDocument();
+    // どの行にも無い層は stack 取得の軽量コピーで、ピルだけ
+    expect(within(layers[2]!).getByRole("link", { name: "#843 merged" })).toBeInTheDocument();
+    expect(within(map).getByText("main")).toBeInTheDocument();
+    // stack 外の PR は今までどおり 1 行
+    expect(
+      within(drawer).getByRole("link", { name: "#839 closed" }).closest("li.d-stack"),
+    ).toBeNull();
+
+    // 他の行の名前を押すと、その行のドロワーへ切り替わる
+    await user.click(within(layers[0]!).getByRole("button", { name: "Layer three" }));
+    const self = within(screen.getByRole("complementary", { name: "ペイン詳細" }))
+      .getByText("◀ この Session")
+      .closest("li")!;
+    expect(within(self).getByRole("link", { name: "#845 open" })).toBeInTheDocument();
+    expect(other).toHaveClass("selected");
+    // 押した名前のボタンは消えるので、フォーカスは切り替えた先のドロワーへ
+    await waitFor(() => expect(screen.getByRole("button", { name: "詳細を閉じる" })).toHaveFocus());
+  });
+
+  /* 同じ PR が複数の行に載ると、層の持ち主も複数になる。名前を区切らないと
+   * 1 つの名前に見え、どれを押すとどの行に切り替わるのか分からない。 */
+  it("同じ層を持つ行が複数なら、名前を区切って並べる", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "owners output"));
+    const entries = [
+      { position: 1, pr: { number: 844, state: "OPEN", mergedAt: null } },
+      { position: 2, pr: { number: 845, state: "OPEN", mergedAt: null } },
+    ];
+    const stack = (position: number) => ({
+      number: 12,
+      size: 2,
+      baseRef: "main",
+      position,
+      entries,
+    });
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("150", [
+          makePane({
+            issueNum: 151,
+            displayName: "Layer one",
+            prs: [makePr({ number: 844, stack: stack(1) })],
+          }),
+          makePane({
+            issueNum: 152,
+            displayName: "Layer two",
+            prs: [makePr({ number: 845, stack: stack(2) })],
+          }),
+          makePane({
+            issueNum: 153,
+            displayName: "Layer two again",
+            prs: [makePr({ number: 845, stack: stack(2) })],
+          }),
+        ]),
+      ]),
+    );
+
+    await user.click(screen.getByText("Layer one"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    const layer = within(drawer).getByRole("link", { name: "#845 open" }).closest("li")!;
+    expect(
+      within(layer)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Layer two", "Layer two again"]);
+    expect(layer.textContent).toContain("Layer two, Layer two again");
+  });
+
+  it("base が別の行の PR の head なら推定の連鎖として出す", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "chain output"));
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("@manual", [
+          makePane({
+            issueNum: -1,
+            displayName: "Base task",
+            branchName: "fanout/base-task",
+            prs: [makePr({ number: 801, headRef: "fanout/base-task", baseRef: "main" })],
+          }),
+          makePane({
+            issueNum: -2,
+            displayName: "Stacked task",
+            branchName: "fanout/stacked-task",
+            prs: [
+              makePr({ number: 802, headRef: "fanout/stacked-task", baseRef: "fanout/base-task" }),
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const row = screen.getByText("Stacked task").closest("tr")!;
+    expect(within(row).getByText("⧉ 2/2")).toHaveAttribute(
+      "title",
+      "base 連鎖(推定)· 2 層中 2 層目 → main",
+    );
+
+    await user.click(within(row).getByText("Stacked task"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    const map = within(drawer).getByText("base 連鎖(推定)→ main · 2 層").closest("li")!;
+    const layers = within(map).getAllByRole("listitem");
+    expect(within(layers[0]!).getByText("◀ この Session")).toBeInTheDocument();
+    expect(within(layers[1]!).getByText("Base task")).toBeInTheDocument();
   });
 
   it("degraded フラグで banner を表示し、正常時は隠す", () => {

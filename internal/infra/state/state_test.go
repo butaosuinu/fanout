@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 )
 
 func TestLoadMissingReturnsEmptyStore(t *testing.T) {
@@ -86,6 +87,22 @@ func TestFannedNumbersForOtherParents(t *testing.T) {
 	}
 }
 
+func TestEmitterRowIndexUsesPathAndWorkspaceLabel(t *testing.T) {
+	store := Store{Panes: []Pane{
+		{Parent: "425", IssueNum: -1, EmitterRowKey: "coordinator:@manual:/repo:-1", WorktreePath: "/repo/one", WorkspaceLabel: "owned-one"},
+		{Parent: "426", IssueNum: -1, EmitterRowKey: "coordinator:@manual:/repo:-1", WorktreePath: "/repo/two", WorkspaceLabel: "owned-two"},
+	}}
+
+	index, err := store.EmitterRowIndex("coordinator:@manual:/repo:-1", "/repo/two", "owned-two")
+	if err != nil || index != 1 {
+		t.Fatalf("EmitterRowIndex() = (%d, %v), want row 1", index, err)
+	}
+	store.Panes = append(store.Panes, store.Panes[1])
+	if _, err := store.EmitterRowIndex("coordinator:@manual:/repo:-1", "/repo/two", "owned-two"); err == nil {
+		t.Fatal("EmitterRowIndex() accepted ambiguous stable identity")
+	}
+}
+
 func TestLockedStoreRecordPaneWritesAtomicallyShapedJSON(t *testing.T) {
 	root := t.TempDir()
 	locked, err := LockProject(root)
@@ -127,6 +144,61 @@ func TestLockedStoreRecordPaneWritesAtomicallyShapedJSON(t *testing.T) {
 	}
 	if got := decoded.Panes[0].BaseBranch; got != "main" {
 		t.Fatalf("baseBranch = %q, want main", got)
+	}
+}
+
+func TestRecordSequencedClaudePaneFencesLegacyEmitter(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+	legacy := Pane{
+		Parent: "81", IssueNum: 83, Backend: backend.Herdr, Agent: "claude",
+		LaunchNonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+		ReportedState: "blocked", ReportedStateSeq: 0, StateRefinement: true,
+		LaunchArgs: []string{"--settings", `{}`},
+	}
+	locked.Panes = []Pane{legacy}
+	current := Pane{
+		Parent: "81", IssueNum: 84, Backend: backend.Herdr, Agent: "claude",
+		LaunchNonce: strings.Repeat("c", 32), EmitterNonce: strings.Repeat("d", 32),
+		ReportedState: "working", ReportedStateSeq: 2, StateRefinement: true,
+		LaunchArgs: []string{"--settings", `{"command":"__fanout-emitter-sequence"}`},
+	}
+	if err := locked.RecordPane(current); err != nil {
+		t.Fatal(err)
+	}
+
+	gotLegacy, found := locked.Find("81", 83)
+	if !found || gotLegacy.ReportedState != "" || gotLegacy.ReportedStateSeq != 0 ||
+		gotLegacy.StateRefinement || gotLegacy.EmitterNonce == legacy.EmitterNonce ||
+		!telemetry.ValidNonce(gotLegacy.EmitterNonce) {
+		t.Fatalf("legacy emitter = (%+v, %t), want fenced", gotLegacy, found)
+	}
+	gotCurrent, found := locked.Find("81", 84)
+	if !found || gotCurrent.ReportedStateSeq != 2 || gotCurrent.EmitterNonce != current.EmitterNonce {
+		t.Fatalf("sequenced emitter = (%+v, %t), want unchanged", gotCurrent, found)
+	}
+}
+
+func TestLocationRebindTelemetryKeepsOriginalEmitterAdmission(t *testing.T) {
+	pane := Pane{
+		EmitterNonce: strings.Repeat("a", 32), ReportedState: "idle",
+		ReportedStateSeq: 7, StateRefinement: true,
+	}
+	if err := pane.InvalidateTelemetryForLocationRebind(8); err != nil {
+		t.Fatal(err)
+	}
+	firstRotated := pane.EmitterNonce
+	if err := pane.InvalidateTelemetryForLocationRebind(9); err != nil {
+		t.Fatal(err)
+	}
+	if pane.EmitterRebindNonce != strings.Repeat("a", 32) || pane.EmitterNonce == firstRotated ||
+		pane.EmitterRebindSequence != 9 || pane.ReportedState != "" ||
+		pane.ReportedStateSeq != 0 || pane.StateRefinement {
+		t.Fatalf("repeated location telemetry rebind = %+v", pane)
 	}
 }
 

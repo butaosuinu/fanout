@@ -25,6 +25,10 @@ const herdrPaneLauncherEnv = "FANOUT_HERDR_PANE_LAUNCHER"
 // internal/infra/herdrrun/owned.go so a rename there fails here.
 const herdrSupervisorCommand = "__herdr-supervisor"
 
+// herdrDashboardOpenCommand duplicates the private token stored in the owned
+// Herdr config. Older pinned helpers keep dispatching it after an upgrade.
+const herdrDashboardOpenCommand = "__herdr-dashboard-open"
+
 // TestSelfExecSubcommandNames pins the hidden self-exec subcommand tokens so a
 // rename can never silently desync the tmux command line that spawns a popup /
 // Plan Mode pane from the dispatch that recognizes it back. These strings are
@@ -76,6 +80,16 @@ func TestHerdrSupervisorSelfExecToken(t *testing.T) {
 	}
 }
 
+func TestHerdrDashboardSelfExecToken(t *testing.T) {
+	if herdrrun.DashboardOpenCommand != herdrDashboardOpenCommand {
+		t.Fatalf("dashboard self-exec token = %q, want %q; %s",
+			herdrrun.DashboardOpenCommand, herdrDashboardOpenCommand, upgradeContract)
+	}
+	if !herdrrun.IsDashboardOpenRequest([]string{herdrDashboardOpenCommand, "/run/dashboard-launcher.json"}) {
+		t.Fatalf("dashboard self-exec token is not recognized; %s", upgradeContract)
+	}
+}
+
 // TestHerdrPaneLauncherEnvMarker pins the pane-launcher env marker across
 // binary versions: herdr starts panes with the shell environment recorded when
 // the session was created, so the new binary has to keep keying on the old name
@@ -108,7 +122,7 @@ func TestHerdrPaneLauncherEnvMarker(t *testing.T) {
 	}
 }
 
-// TestSelfExecArgs covers the argv shapes the two self-exec entries arrive
+// TestSelfExecArgs covers the argv shapes the self-exec entries arrive
 // with. The env-recognized launcher carries no token at all, so the slice that
 // forwards a token's trailing arguments has to tolerate a one-element argv.
 func TestSelfExecArgs(t *testing.T) {
@@ -123,6 +137,11 @@ func TestSelfExecArgs(t *testing.T) {
 			want: nil,
 		},
 		{name: "token with nothing trailing it", argv: []string{"fanout", herdrSupervisorCommand}, want: nil},
+		{
+			name: "dashboard token forwards its descriptor",
+			argv: []string{"fanout", herdrDashboardOpenCommand, "/run/dashboard-launcher.json"},
+			want: []string{"/run/dashboard-launcher.json"},
+		},
 		{
 			// The supervisor's real argv: marker path, nonce, start token, ready fd.
 			name: "token forwards everything after it",

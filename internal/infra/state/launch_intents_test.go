@@ -15,7 +15,30 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 )
+
+func TestRuntimeResourceFromObservationCleansNonEmptyPaths(t *testing.T) {
+	observation := backend.WorkspaceObservation{
+		WorkspaceID: "workspace-1", Label: "label-1",
+		Pane: backend.PaneRef{Pane: "pane-1"}, TerminalID: "terminal-1",
+		CWD: "/repo/worktree/../worktree", RepoKey: "/repo/./.git", RepoRoot: "/repo/.",
+	}
+	want := RuntimeResource{
+		WorkspaceID: "workspace-1", Label: "label-1", PaneID: "pane-1", TerminalID: "terminal-1",
+		CurrentPath: "/repo/worktree", RepoKey: "/repo/.git", RepoRoot: "/repo",
+	}
+	if got := RuntimeResourceFromObservation(observation); got != want {
+		t.Fatalf("RuntimeResourceFromObservation() = %#v, want %#v", got, want)
+	}
+
+	// Coordinator postconditions require empty provenance, and wildcard matching relies on preserving it.
+	observation.CWD, observation.RepoKey, observation.RepoRoot = "", "", ""
+	got := RuntimeResourceFromObservation(observation)
+	if got.CurrentPath != "" || got.RepoKey != "" || got.RepoRoot != "" {
+		t.Fatalf("empty paths projected as (%q, %q, %q), want empty", got.CurrentPath, got.RepoKey, got.RepoRoot)
+	}
+}
 
 func TestHerdrIntentsAreSharedAcrossLinkedWorktrees(t *testing.T) {
 	repo := newLaunchJournalRepo(t)
@@ -316,7 +339,6 @@ func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T
 	if err := validateIntent(regular); err == nil || !strings.Contains(err.Error(), "unrelated server identity") {
 		t.Fatalf("regular intent with server identity error = %v", err)
 	}
-
 	restart = testServerIntent(IntentRestart)
 	restart.CleanupPhase = CleanupRemove
 	if err := validateIntent(restart); err == nil || !strings.Contains(err.Error(), "unrelated fields") {
@@ -525,6 +547,39 @@ func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
 	if err := validateIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
 		t.Fatalf("unknown cleanup phase error = %v", err)
 	}
+	cleanup = testCleanupIntent(repo, CleanupRemove, IntentPlanned)
+	cleanup.CleanupHookPhase = "unknown"
+	if err := validateIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
+		t.Fatalf("unknown cleanup hook phase error = %v", err)
+	}
+	for _, phase := range []CleanupHookPhase{
+		CleanupHookBeforeWorktreeRemoveIssued,
+		CleanupHookBeforePaneCloseIssued,
+	} {
+		cleanup = testCleanupIntent(repo, CleanupRemove, IntentPlanned)
+		cleanup.CleanupHookPhase = phase
+		if err := validateIntent(cleanup); err != nil {
+			t.Fatalf("cleanup hook phase %q: %v", phase, err)
+		}
+	}
+	for _, phase := range []CleanupHookPhase{
+		CleanupHookPaneClosedIssued,
+		CleanupHookWorktreeRemovedIssued,
+		CleanupHookCompleted,
+	} {
+		cleanup = testCleanupIntent(repo, CleanupRemove, IntentRealized)
+		cleanup.CleanupHookPhase = phase
+		if err := validateIntent(cleanup); err != nil {
+			t.Fatalf("cleanup completion hook phase %q: %v", phase, err)
+		}
+	}
+	cleanup = testCleanupIntent(repo, CleanupRemove, IntentRealized)
+	required := false
+	cleanup.CleanupWorktreeRemovedRequired = &required
+	cleanup.CleanupHookPhase = CleanupHookWorktreeRemovedIssued
+	if err := validateIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
+		t.Fatalf("worktree_removed without obligation error = %v", err)
+	}
 }
 
 func TestHerdrCleanupIntentCoexistsWithServerRestart(t *testing.T) {
@@ -561,6 +616,8 @@ func testCleanupIntent(
 	cleanup.Kind = IntentCleanup
 	cleanup.Status = status
 	cleanup.CleanupPhase = phase
+	required := true
+	cleanup.CleanupWorktreeRemovedRequired = &required
 	cleanup.Resource = RuntimeResource{
 		WorkspaceID: "w2", Label: cleanup.WorkspaceLabel,
 		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: cleanup.WorktreePath,
@@ -696,7 +753,8 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 		}
 		intent.Launch = &LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
-			PendingReportedState: "working", Agent: "claude", AgentName: "fanout-agent",
+			PendingReportedState: "working", PendingReportedSeq: 1,
+			Agent: "claude", AgentName: "fanout-agent",
 			Executable: "/opt/bin/claude", Args: []string{"prompt"},
 			EnvFilePath: "/tmp/fanout-env.json", EnvNameCount: 1,
 		}
@@ -707,6 +765,7 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 	}
 	codex := valid()
 	codex.Launch.Agent = "codex"
+	codex.Launch.PendingReportedSeq = 0
 	codex.Launch.CodexPlanStatusPath = filepath.Join(t.TempDir(), "status.json")
 	if err := validateIntent(codex); err != nil {
 		t.Fatalf("Codex Plan emitter fields: %v", err)
@@ -716,6 +775,7 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 		mutate func(*LaunchCapsule)
 	}{
 		{name: "pending without nonce", mutate: func(launch *LaunchCapsule) { launch.EmitterNonce = "" }},
+		{name: "Claude pending without sequence", mutate: func(launch *LaunchCapsule) { launch.PendingReportedSeq = 0 }},
 		{name: "Codex emitter without Plan mode", mutate: func(launch *LaunchCapsule) { launch.Agent = "codex" }},
 		{name: "unsupported emitter", mutate: func(launch *LaunchCapsule) { launch.Agent = "opencode" }},
 		{name: "synthetic pending", mutate: func(launch *LaunchCapsule) { launch.PendingReportedState = "running" }},
@@ -728,6 +788,152 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadLaunchJournalDiscardsLegacyClaudePendingTelemetry(t *testing.T) {
+	repo := newLaunchJournalRepo(t)
+	intent := testWorktreeIntent(repo, "425", 426, "legacy-telemetry")
+	intent.Status = IntentRealized
+	intent.Resource = RuntimeResource{
+		WorkspaceID: "w2", Label: intent.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: intent.WorktreePath,
+		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	session := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "legacy-session",
+	}
+	intent.Launch = &LaunchCapsule{
+		Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+		PendingReportedState: "working", PendingReportedSeq: 1, PendingAgentSession: &session,
+		Agent: "claude", AgentName: "fanout-agent",
+		Executable: "/opt/bin/claude", Args: []string{"prompt"},
+		EnvFilePath: "/tmp/fanout-env.json", EnvNameCount: 1,
+	}
+	project, journal := lockLaunchJournalForTest(t, repo)
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(errors.Join(err, project.Unlock()))
+	}
+	if err := project.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := LaunchJournalPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sequenceField = `"pendingReportedSequence": 1,` + "\n"
+	legacy := strings.Replace(string(contents), sequenceField, "", 1)
+	if legacy == string(contents) {
+		t.Fatal("saved journal lacks the pending sequence fixture")
+	}
+	if writeErr := os.WriteFile(path, []byte(legacy), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	loaded, err := LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := loaded.FindIntent(intent.ID)
+	if !found || got.Launch.PendingReportedState != "" ||
+		got.Launch.PendingReportedSeq != 0 || got.Launch.PendingAgentSession != nil {
+		t.Fatalf("legacy pending telemetry = (%+v, %t), want discarded", got, found)
+	}
+}
+
+func TestSaveSequencedClaudeIntentFencesLegacyFinalAndProvisionalEmitters(t *testing.T) {
+	repo := newLaunchJournalRepo(t)
+	legacyIntent := testClaudeEmitterIntent(t, repo, 426, "legacy", []string{"--settings", `{}`})
+	legacyIntent.Launch.PendingReportedState = "working"
+	legacyIntent.Launch.PendingReportedSeq = 1
+	legacySession := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "legacy-session",
+	}
+	legacyIntent.Launch.PendingAgentSession = &legacySession
+	legacyPane := Pane{
+		Parent: "425", IssueNum: 428, Backend: backend.Herdr, Agent: "claude",
+		LaunchNonce: strings.Repeat("c", 32), EmitterNonce: strings.Repeat("d", 32),
+		ReportedState: "blocked", StateRefinement: true,
+		LaunchArgs: []string{"--settings", `{}`},
+	}
+
+	project, journal := lockLaunchJournalForTest(t, repo)
+	project.Panes = []Pane{legacyPane}
+	if err := project.Save(); err != nil {
+		t.Fatal(errors.Join(err, project.Unlock()))
+	}
+	journal.UpsertIntent(legacyIntent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(errors.Join(err, project.Unlock()))
+	}
+	if err := project.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	project, journal = lockLaunchJournalForTest(t, repo)
+	sequenced := testClaudeEmitterIntent(t, repo, 427, "sequenced", []string{
+		"--settings", `{"command":"` + telemetry.SequenceCommand + `"}`,
+	})
+	journal.UpsertIntent(sequenced)
+	if err := journal.Save(); err != nil {
+		t.Fatal(errors.Join(err, project.Unlock()))
+	}
+	if err := project.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	storedState, err := LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPane, found := storedState.Find("425", 428)
+	if !found || gotPane.ReportedState != "" || gotPane.StateRefinement ||
+		gotPane.EmitterNonce == legacyPane.EmitterNonce || !telemetry.ValidNonce(gotPane.EmitterNonce) {
+		t.Fatalf("legacy final emitter = (%+v, %t), want persisted fence", gotPane, found)
+	}
+	storedJournal, err := LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotIntent, found := storedJournal.FindIntent(legacyIntent.ID)
+	if !found || gotIntent.Launch.PendingReportedState != "" || gotIntent.Launch.PendingReportedSeq != 0 ||
+		gotIntent.Launch.PendingAgentSession != nil ||
+		gotIntent.Launch.EmitterNonce == legacyIntent.Launch.EmitterNonce ||
+		!telemetry.ValidNonce(gotIntent.Launch.EmitterNonce) {
+		t.Fatalf("legacy provisional emitter = (%+v, %t), want fenced", gotIntent, found)
+	}
+	gotSequenced, found := storedJournal.FindIntent(sequenced.ID)
+	if !found || gotSequenced.Launch.EmitterNonce != sequenced.Launch.EmitterNonce {
+		t.Fatalf("sequenced emitter = (%+v, %t), want unchanged", gotSequenced, found)
+	}
+}
+
+func testClaudeEmitterIntent(
+	t *testing.T,
+	repo string,
+	issue int,
+	slug string,
+	args []string,
+) LaunchIntent {
+	t.Helper()
+	intent := testWorktreeIntent(repo, "425", issue, slug)
+	intent.Status = IntentRealized
+	intent.Resource = RuntimeResource{
+		WorkspaceID: "w-" + slug, Label: intent.WorkspaceLabel,
+		PaneID: "w-" + slug + ":p1", TerminalID: "term-" + slug,
+		CurrentPath: intent.WorktreePath, RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	intent.Launch = &LaunchCapsule{
+		Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+		Agent: "claude", AgentName: "fanout-agent", Executable: "/opt/bin/claude", Args: args,
+		EnvFilePath: "/tmp/fanout-env.json", EnvNameCount: 1,
+	}
+	return intent
 }
 
 func testCoordinatorIntent(repo, parent string) LaunchIntent {

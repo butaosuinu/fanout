@@ -125,7 +125,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		return IssueExecutionResult{}, exitcode.OK
 	}
 
-	store, recorder, code := LoadState(cfg.DryRun, rt.Info.ProjectRoot, lg)
+	store, recorder, code := LoadState(cfg.DryRun, rt, lg)
 	if code != exitcode.OK {
 		return IssueExecutionResult{}, code
 	}
@@ -248,10 +248,9 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		return issueExecutionResult(result, plan), exitcode.Env
 	}
 
-	// Register tmux keybindings so the user can pop the read-only dashboard
-	// (F12 or prefix + D) and same-worktree action menu (prefix + M) from any
-	// fanout pane. The bindings resolve the repo from the pressing pane at
-	// keypress, so they work from child worktree panes and across repos.
+	// Register the runtime's dashboard shortcuts after a live launch. The
+	// shortcut resolves the repo from the pressing pane at keypress, so it works
+	// from child worktree panes and across repos.
 	// Best-effort, live runs only.
 	if shouldBindRuntimeKeys(cfg.DryRun, result.Created, rt.Backend) {
 		bindKeys(lg, resolvedSettings.DashboardKeybind)

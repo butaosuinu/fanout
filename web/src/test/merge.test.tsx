@@ -281,6 +281,22 @@ describe("無効化", () => {
     { name: "closed", pr: { state: "CLOSED" }, reason: /close 済み/ },
     { name: "draft", pr: { isDraft: true }, reason: /draft PR/ },
     { name: "conflicting", pr: { mergeable: "CONFLICTING" }, reason: /競合しています/ },
+    {
+      name: "native stack の層",
+      pr: {
+        stack: {
+          number: 9,
+          size: 2,
+          baseRef: "main",
+          position: 2,
+          entries: [
+            { position: 1, pr: { number: 700, state: "OPEN", mergedAt: null } },
+            { position: 2, pr: { number: 701, state: "OPEN", mergedAt: null } },
+          ],
+        },
+      },
+      reason: /native stack の層はダッシュボードからマージできません/,
+    },
   ];
 
   for (const c of blocked) {
@@ -336,6 +352,72 @@ describe("無効化", () => {
 
     const drawer = await openDrawer(user);
     expect(within(drawer).getByRole("button", { name: "#701 をマージ" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  /* 手で積んだ連鎖の途中層は、trunk ではなく下の層の branch へ入る。下の層は別の
+   * 行が持つので、行のコピーではなく snapshot 全体から引く。 */
+  it("base を head に持つ open PR が別の行にあれば塞ぐ", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            prs: [makePr({ headRef: "fanout/fix-login", baseRef: "fanout/lower" })],
+          }),
+          makePane({
+            issueNum: 100,
+            displayName: "Lower layer",
+            slug: "lower",
+            paneId: "%2",
+            branchName: "fanout/lower",
+            prs: [makePr({ number: 700, headRef: "fanout/lower" })],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    const button = within(drawer).getByRole("button", { name: /下の層 #700 が未マージ/ });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    await user.click(button);
+    expect(calls).toHaveLength(0);
+  });
+
+  /* 1 つの行が上下 2 層を持つとき、上の層を対象にすると唯一のボタンが無効になり、
+   * マージできる下の層に届かない。 */
+  it("同じ行に下の層があれば、その下の層をマージ対象にする", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "",
+            prs: [
+              makePr({ headRef: "fanout/upper", baseRef: "fanout/lower" }),
+              makePr({ number: 700, headRef: "fanout/lower" }),
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    expect(within(drawer).getByRole("button", { name: "#700 をマージ" })).not.toHaveAttribute(
       "aria-disabled",
     );
   });
@@ -970,6 +1052,100 @@ describe("マージ後のブランチ削除", () => {
     await waitFor(() =>
       expect(within(drawer).queryByRole("button", { name: "ブランチを削除" })).toBeNull(),
     );
+  });
+
+  /* その branch を base にしている open PR がある間、サーバは 409 branch_is_base で
+   * 拒否する。押すたびに 409 になるボタンにしない。 */
+  it("この branch を base にしている open PR があれば、削除ボタンを無効にする", async () => {
+    const calls: unknown[] = [];
+    server.use(
+      http.post(DELETE_BRANCH_PATH, () => {
+        calls.push(1);
+        return HttpResponse.json({ prNumber: 701, branch: "fanout/fix-login", deleted: true });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            prs: [makePr({ state: "MERGED", headRef: "fanout/fix-login" })],
+          }),
+          makePane({
+            issueNum: 102,
+            displayName: "Upper layer",
+            slug: "upper",
+            paneId: "%2",
+            branchName: "fanout/upper",
+            prs: [makePr({ number: 702, headRef: "fanout/upper", baseRef: "fanout/fix-login" })],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    const remove = within(drawer).getByRole("button", { name: /#702 がこの branch を base に/ });
+    expect(remove).toHaveAttribute("aria-disabled", "true");
+    await user.click(remove);
+    expect(calls).toHaveLength(0);
+  });
+
+  /* stack map は他の行の層も描くが、削除は行の head と照合される。他の行の層に
+   * 出すと、押すたびに 409 になるボタンになる。 */
+  it("stack map では自分の層にだけ出し、他の行の層には出さない", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const merged = { state: "MERGED", mergedAt: "2026-09-01T00:00:00Z" };
+    const entries = [
+      { position: 1, pr: { number: 701, ...merged } },
+      { position: 2, pr: { number: 702, ...merged } },
+    ];
+    const stack = (position: number) => ({
+      number: 9,
+      size: 2,
+      baseRef: "main",
+      position,
+      entries,
+    });
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            // 記録 branch の無い issue 行: 表示側の head 照合がどの head も通す形
+            branchName: "",
+            prs: [makePr({ ...merged, headRef: "fanout/fix-login", stack: stack(1) })],
+          }),
+          makePane({
+            issueNum: 102,
+            displayName: "Next layer",
+            slug: "next-layer",
+            paneId: "%2",
+            branchName: "fanout/next-layer",
+            prs: [
+              makePr({ ...merged, number: 702, headRef: "fanout/next-layer", stack: stack(2) }),
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    expect(within(drawer).getByRole("link", { name: "#702 merged" })).toBeInTheDocument();
+    const buttons = within(drawer).getAllByRole("button", { name: "ブランチを削除" });
+    expect(buttons).toHaveLength(1);
+    expect(
+      within(buttons[0]!.closest("li")!).getByRole("link", { name: "#701 merged" }),
+    ).toBeInTheDocument();
   });
 
   /* fork の head を base 側の同名 branch として消さないための表示側ガード。 */

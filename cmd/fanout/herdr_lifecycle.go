@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
@@ -18,10 +19,11 @@ import (
 const herdrLifecycleTimeout = backend.DefaultWaitTimeout + time.Minute
 
 type herdrLifecycleDeps struct {
-	projectRoot  func() (string, error)
-	repoIdentity func(context.Context, string) (worktree.RepoIdentity, error)
-	restart      func(ctx context.Context, projectRoot, repoKey string) (string, error)
-	shutdown     func(ctx context.Context, projectRoot, repoKey string) error
+	projectRoot     func() (string, error)
+	repoIdentity    func(context.Context, string) (worktree.RepoIdentity, error)
+	refreshSessions func(string) error
+	restart         func(ctx context.Context, projectRoot, repoKey string) (string, error)
+	shutdown        func(ctx context.Context, projectRoot, repoKey string) error
 }
 
 // newManagedServerIO adapts the runtime's owned-server lifecycle calls to the
@@ -55,6 +57,10 @@ func cmdHerdrLifecycle(args []string, lg *log.Logger) exitcode.Code {
 	deps := herdrLifecycleDeps{
 		projectRoot:  func() (string, error) { return gitroot.Toplevel("") },
 		repoIdentity: worktree.ResolveRepoIdentity,
+		refreshSessions: func(root string) error {
+			_, err := sessionbinding.StateLoader(root, runtimeListLiveForProject(root, false))()
+			return err
+		},
 		restart: func(ctx context.Context, root, repoKey string) (string, error) {
 			return panelaunch.RestartManagedServer(ctx, root, newManagedServerIO(repoKey))
 		},
@@ -107,19 +113,34 @@ func executeHerdrLifecycle(
 	deps herdrLifecycleDeps,
 ) exitcode.Code {
 	if action == "restart" {
-		session, err := deps.restart(ctx, root, repoKey)
-		if err != nil {
-			lg.Err("herdr restart: %v", err)
-			return exitcode.Env
-		}
-		lg.Ok("Herdr owned server restarted: %s", session)
-		return exitcode.OK
+		return executeServerRestart(ctx, root, repoKey, lg, deps.refreshSessions, deps.restart)
 	}
 	if err := deps.shutdown(ctx, root, repoKey); err != nil {
 		lg.Err("herdr shutdown: %v", err)
 		return exitcode.Env
 	}
 	lg.Ok("Herdr owned server shut down")
+	return exitcode.OK
+}
+
+func executeServerRestart(
+	ctx context.Context,
+	root string,
+	repoKey string,
+	lg *log.Logger,
+	refreshSessions func(string) error,
+	restart func(context.Context, string, string) (string, error),
+) exitcode.Code {
+	if err := refreshSessions(root); err != nil {
+		lg.Err("herdr restart: refresh agent sessions: %v", err)
+		return exitcode.Env
+	}
+	session, err := restart(ctx, root, repoKey)
+	if err != nil {
+		lg.Err("herdr restart: %v", err)
+		return exitcode.Env
+	}
+	lg.Ok("Herdr owned server restarted: %s", session)
 	return exitcode.OK
 }
 

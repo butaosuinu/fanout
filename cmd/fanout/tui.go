@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -32,8 +34,9 @@ const tuiPaneTitle = "fanout tui"
 var runTUI = fanouttui.Run
 
 var (
-	ensureManagedSessionForTUI = paneruntime.EnsureProject
-	ensureManagedConsoleForTUI = panelaunch.EnsureManagedConsole
+	ensureManagedSessionForTUI    = paneruntime.EnsureProject
+	ensureManagedConsoleForTUI    = panelaunch.EnsureManagedConsole
+	syncManagedDashboardKeyForTUI = syncOwnedDashboardKey
 )
 
 // The console entry's terminal probe and process replacement are seams so
@@ -177,6 +180,12 @@ func cmdManagedConsoleTUI(
 		openErr = fmt.Errorf("%s", ownedPaneUnavailable)
 		owned = nil
 	}
+	if openErr == nil {
+		if err := reexecManagedConsole(projectRoot, owned); err != nil {
+			lg.Err("tui: reopen owned console: %v", err)
+			return exitcode.Env
+		}
+	}
 	if openErr != nil {
 		lg.Warn("tui: owned Herdr actions disabled: %v", openErr)
 	}
@@ -189,6 +198,18 @@ func cmdManagedConsoleTUI(
 		owned,
 		lg,
 	)
+}
+
+func reexecManagedConsole(root string, owned panelaunch.ManagedSessionRuntime) error {
+	path, err := panelaunch.ManagedConsoleExecutable(root, os.Getenv("HERDR_PANE_ID"), owned)
+	if err != nil || path == "" {
+		return err
+	}
+	current, err := os.Executable()
+	if err != nil || current == path {
+		return err
+	}
+	return execSessionAttach(backend.AttachExec{Path: path, Argv: []string{path}, Env: os.Environ()})
 }
 
 // handoffConsoleShell execs the operator shell the console bootstrap recorded
@@ -240,6 +261,7 @@ func enterManagedConsole(
 		lg.Err("tui: ensure owned Herdr session: %v", err)
 		return exitcode.Env
 	}
+	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	console, err := ensureManagedConsoleForTUI(ctx, projectRoot, owned, os.Environ(), "")
@@ -247,6 +269,7 @@ func enterManagedConsole(
 		lg.Err("tui: ensure owned Herdr console: %v", err)
 		return exitcode.Env
 	}
+	syncManagedDashboardKeyForTUI(lg, resolvedSettings.DashboardKeybind, projectRoot, owned)
 	lg.Ok("Herdr console %s is ready (selected by %s)", console.Pane.PaneID, selection.Reason)
 	return attachOwnedConsole(console, lg)
 }
@@ -277,14 +300,19 @@ func runTUIConsole(
 ) exitcode.Code {
 	hosted := console != nil
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+	syncOwnedDashboardKey(lg, resolvedSettings.DashboardKeybind, projectRoot, owned)
 	listLive := runtimeListLiveForProject(projectRoot, hosted)
 	hookConfig := hooks.LoadUserConfig(lg)
 	var watcher fanouttui.WatcherRunner
 	var watchInterval time.Duration
 	var watchLabel string
 	var watchErr error
-	ownedInteractive := hosted || owned != nil
-	watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, hosted, ownedInteractive)
+	interactiveLaunch := hosted || owned != nil
+	dashboardOwnerSync := newTUIDashboardOwnerSync(projectRoot, owned, lg)
+	watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(
+		projectRoot, session, commandName, resolvedSettings, hookConfig,
+		hosted, interactiveLaunch, dashboardOwnerSync,
+	)
 	if watchErr != nil {
 		lg.Err("watcher: %v", watchErr)
 		return exitcode.Env
@@ -320,7 +348,9 @@ func runTUIConsole(
 			hookConfig,
 			selection,
 			hosted,
-			ownedInteractive,
+			interactiveLaunch,
+			owned,
+			dashboardOwnerSync,
 			lg,
 		),
 		ListLive:                         listLive,
@@ -334,7 +364,10 @@ func runTUIConsole(
 		)
 		defer restoreTitle()
 	} else {
-		wireManagedConsoleTUI(&opts, projectRoot, session, commandName, resolvedSettings, hookConfig, owned)
+		wireManagedConsoleTUI(
+			&opts, projectRoot, session, commandName, resolvedSettings, hookConfig,
+			owned, dashboardOwnerSync,
+		)
 	}
 
 	if err := runTUI(opts); err != nil {
@@ -423,6 +456,7 @@ func wireManagedConsoleTUI(
 	resolvedSettings settings.Settings,
 	hookConfig hooks.Config,
 	owned paneruntime.ManagedSession,
+	dashboardOwnerSync func(),
 ) {
 	opts.LaunchActionDisabled = func() string { return "" }
 	opts.ManagedActionDisabled = func(pane state.Pane) string {
@@ -437,7 +471,8 @@ func wireManagedConsoleTUI(
 	}
 	opts.LaunchAttach = newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig)
 	opts.LaunchShell = newManagedLaunchShellFunc(projectRoot, owned)
-	wireManagedPaneTUI(opts, owned)
+	wrapManagedTUILaunches(opts, dashboardOwnerSync)
+	wireManagedPaneTUI(opts, projectRoot, owned)
 }
 
 func wireManagedNewSessionTUI(
@@ -454,9 +489,17 @@ func wireManagedNewSessionTUI(
 	opts.OpenIssue = newTUIOpenIssueFunc(projectRoot)
 }
 
-func wireManagedPaneTUI(opts *fanouttui.Options, owned paneruntime.ManagedSession) {
+func wireManagedPaneTUI(opts *fanouttui.Options, projectRoot string, owned paneruntime.ManagedSession) {
 	opts.FocusManagedPane = func(pane state.Pane) error {
-		bound, ref, err := bindManagedPane(owned, pane)
+		ownedBackend := owned.Backend()
+		if ownedBackend == nil {
+			return fmt.Errorf("%s", ownedPaneUnavailable)
+		}
+		current, err := sessionbinding.ReloadPane(projectRoot, pane, ownedBackend.ListLive)
+		if err != nil {
+			return err
+		}
+		bound, ref, err := bindManagedPane(owned, current)
 		if err != nil {
 			return err
 		}
@@ -495,51 +538,162 @@ func runtimeShellPaneAlive(hostName backend.Name, listLive func() ([]backend.Liv
 	}
 }
 
-func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, selection backend.Selection, hosted, ownedInteractive bool, lg *log.Logger) fanouttui.SettingsReloadFunc {
+func newTUISettingsReloadFunc(
+	projectRoot, session, commandName string,
+	hookConfig hooks.Config,
+	selection backend.Selection,
+	hosted, interactiveLaunch bool,
+	owned paneruntime.ManagedSession,
+	dashboardOwnerSync func(),
+	lg *log.Logger,
+) fanouttui.SettingsReloadFunc {
 	return func() (fanouttui.SettingsRuntime, error) {
-		resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
-		var watcher fanouttui.WatcherRunner
-		var watchInterval time.Duration
-		var watchLabel string
-		var watchErr error
-		watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, hosted, ownedInteractive)
-		if watchErr != nil {
-			return fanouttui.SettingsRuntime{}, fmt.Errorf("watcher: %w", watchErr)
-		}
-		notifier, err := fanoutnotify.New(fanoutnotify.Config{
-			Channels:        resolvedSettings.Notifications,
-			RuntimeBackend:  selection.Name,
-			RuntimeTarget:   session,
-			NtfyURL:         resolvedSettings.NtfyURL,
-			SlackWebhookURL: resolvedSettings.SlackWebhookURL,
-			BellWriter:      os.Stdout,
-		})
-		if err != nil {
-			return fanouttui.SettingsRuntime{}, fmt.Errorf("notifications: %w", err)
-		}
-		runtime := fanouttui.SettingsRuntime{
-			Watcher:             watcher,
-			WatchInterval:       watchInterval,
-			WatchLabel:          watchLabel,
-			WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
-			Notifier:            notifier,
-		}
-		syncTUIReloadKeys(hosted, resolvedSettings, lg)
-		runtime.LaunchIssue = newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig)
-		return runtime, nil
+		return reloadTUISettings(
+			projectRoot, session, commandName, hookConfig, selection,
+			hosted, interactiveLaunch, owned, dashboardOwnerSync, lg,
+		)
 	}
+}
+
+func reloadTUISettings(
+	projectRoot, session, commandName string,
+	hookConfig hooks.Config,
+	selection backend.Selection,
+	hosted, interactiveLaunch bool,
+	owned paneruntime.ManagedSession,
+	dashboardOwnerSync func(),
+	lg *log.Logger,
+) (fanouttui.SettingsRuntime, error) {
+	resolved := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+	watcher, interval, label, err := newTUIWatcher(
+		projectRoot, session, commandName, resolved, hookConfig,
+		hosted, interactiveLaunch, dashboardOwnerSync,
+	)
+	if err != nil {
+		return fanouttui.SettingsRuntime{}, fmt.Errorf("watcher: %w", err)
+	}
+	notifier, err := fanoutnotify.New(fanoutnotify.Config{
+		Channels: resolved.Notifications, RuntimeBackend: selection.Name, RuntimeTarget: session,
+		NtfyURL: resolved.NtfyURL, SlackWebhookURL: resolved.SlackWebhookURL, BellWriter: os.Stdout,
+	})
+	if err != nil {
+		return fanouttui.SettingsRuntime{}, fmt.Errorf("notifications: %w", err)
+	}
+	syncTUIReloadKeys(hosted, owned, projectRoot, resolved, lg)
+	return fanouttui.SettingsRuntime{
+		Watcher: watcher, WatchInterval: interval, WatchLabel: label,
+		WatcherRunningLabel: resolved.WatcherRunningLabel, Notifier: notifier,
+		LaunchIssue: reloadedTUIIssueLauncher(
+			projectRoot, session, commandName, resolved, hookConfig, dashboardOwnerSync,
+		),
+	}, nil
 }
 
 // syncTUIReloadKeys re-applies the global shortcuts a settings reload changed.
 // It runs only for a hosted console: the shortcut registration resolves the
 // host runtime itself, so a managed console would otherwise rewrite keys on a
 // server it never put a pane on.
-func syncTUIReloadKeys(hosted bool, resolved settings.Settings, lg *log.Logger) {
-	if !hosted {
+func syncTUIReloadKeys(hosted bool, owned paneruntime.ManagedSession, projectRoot string, resolved settings.Settings, lg *log.Logger) {
+	if hosted {
+		syncDashboardKey(lg, resolved.DashboardKeybind, true)
+		syncConsoleKey(lg, resolved.ConsoleKeybind, true)
 		return
 	}
-	syncDashboardKey(lg, resolved.DashboardKeybind, true)
-	syncConsoleKey(lg, resolved.ConsoleKeybind, true)
+	syncOwnedDashboardKey(lg, resolved.DashboardKeybind, projectRoot, owned)
+}
+
+func reloadedTUIIssueLauncher(
+	projectRoot, session, commandName string,
+	resolved settings.Settings,
+	hookConfig hooks.Config,
+	dashboardOwnerSync func(),
+) fanouttui.IssueLaunchFunc {
+	launch := newTUIIssueLaunchFunc(projectRoot, session, commandName, resolved, hookConfig)
+	return func(issueNum int, defaultAgent string, overrides map[string]string) (fanouttui.LaunchResult, error) {
+		result, err := launch(issueNum, defaultAgent, overrides)
+		syncDashboardOwnersAfterResult(result, dashboardOwnerSync)
+		return result, err
+	}
+}
+
+func newTUIDashboardOwnerSync(
+	projectRoot string,
+	owned paneruntime.ManagedSession,
+	lg *log.Logger,
+) func() {
+	if owned == nil || owned.Backend() == nil {
+		return nil
+	}
+	return func() {
+		syncLogger := log.NewWith(io.Discard, lg.Stderr(), false)
+		resolved := settings.Resolve(projectRoot, settings.CLIOverrides{}, syncLogger.Warn)
+		if resolved.DashboardKeybind {
+			syncOwnedDashboardKey(syncLogger, true, projectRoot, owned)
+		}
+	}
+}
+
+func wrapManagedTUILaunches(opts *fanouttui.Options, dashboardOwnerSync func()) {
+	if dashboardOwnerSync == nil {
+		return
+	}
+	opts.LaunchPane = wrapTUILaunchPane(opts.LaunchPane, dashboardOwnerSync)
+	opts.LaunchAttach = wrapTUIAttachLaunch(opts.LaunchAttach, dashboardOwnerSync)
+	opts.LaunchIssue = wrapTUIIssueLaunch(opts.LaunchIssue, dashboardOwnerSync)
+	opts.LaunchIssuePlan = wrapTUIIssuePlanLaunch(opts.LaunchIssuePlan, dashboardOwnerSync)
+	opts.LaunchShell = wrapTUIShellLaunch(opts.LaunchShell, dashboardOwnerSync)
+}
+
+func wrapTUILaunchPane(launch fanouttui.LaunchFunc, sync func()) fanouttui.LaunchFunc {
+	return func(req fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
+		result, err := launch(req)
+		syncDashboardOwnersAfterResult(result, sync)
+		return result, err
+	}
+}
+
+func wrapTUIAttachLaunch(launch fanouttui.AttachLaunchFunc, sync func()) fanouttui.AttachLaunchFunc {
+	return func(req fanouttui.AttachLaunchRequest) (string, error) {
+		notice, err := launch(req)
+		syncDashboardOwnersAfterSuccess(err, sync)
+		return notice, err
+	}
+}
+
+func wrapTUIIssueLaunch(launch fanouttui.IssueLaunchFunc, sync func()) fanouttui.IssueLaunchFunc {
+	return func(issueNum int, defaultAgent string, overrides map[string]string) (fanouttui.LaunchResult, error) {
+		result, err := launch(issueNum, defaultAgent, overrides)
+		syncDashboardOwnersAfterResult(result, sync)
+		return result, err
+	}
+}
+
+func wrapTUIIssuePlanLaunch(launch fanouttui.IssuePlanLaunchFunc, sync func()) fanouttui.IssuePlanLaunchFunc {
+	return func(issueNum int, coordinatorAgent, workerAgent string) (fanouttui.LaunchResult, error) {
+		result, err := launch(issueNum, coordinatorAgent, workerAgent)
+		syncDashboardOwnersAfterResult(result, sync)
+		return result, err
+	}
+}
+
+func wrapTUIShellLaunch(launch fanouttui.ShellLaunchFunc, sync func()) fanouttui.ShellLaunchFunc {
+	return func(req fanouttui.ShellLaunchRequest) error {
+		err := launch(req)
+		syncDashboardOwnersAfterSuccess(err, sync)
+		return err
+	}
+}
+
+func syncDashboardOwnersAfterResult(result fanouttui.LaunchResult, sync func()) {
+	if sync != nil && len(result.CreatedPaneIDs) > 0 {
+		sync()
+	}
+}
+
+func syncDashboardOwnersAfterSuccess(err error, sync func()) {
+	if sync != nil && err == nil {
+		sync()
+	}
 }
 
 func tuiLaunchTarget(session string) string {

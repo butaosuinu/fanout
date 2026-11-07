@@ -69,6 +69,9 @@ func main() {
 	// subcommands lead it: each is recognized by an inherited environment
 	// variable or a reserved token, so none can shadow a user-facing verb.
 	table := append(selfExecDispatch(), []dispatch{
+		{telemetry.IsSequenceRequest, func() exitcode.Code {
+			return exitcode.Code(stateemitter.RunSequence(os.Getenv, os.Stdout, os.Stderr))
+		}},
 		{telemetry.IsRequest, func() exitcode.Code {
 			return exitcode.Code(stateemitter.Run(os.Args[2:], os.Getenv, runtimeEmitterObserver{}, os.Stderr))
 		}},
@@ -137,7 +140,7 @@ func main() {
 	if code != exitcode.OK {
 		os.Exit(int(code))
 	}
-	os.Exit(int(run.Issues(cfg, lg, rt, commandName, bindDashboardKey)))
+	os.Exit(int(run.Issues(cfg, lg, rt, commandName, runtimeDashboardKeyBinder(rt))))
 }
 
 func isVersionRequest(args []string) bool {

@@ -2,7 +2,8 @@
 
 fanout のユーザー向けドキュメント（`README.md` / `README.ja.md` /
 `site/content/docs/**` / `RELEASE.md` / `docs/**`）を書く・更新するときの規約。
-CLAUDE.md / AGENTS.md の「Documentation Writing」節の詳細版で、禁止語・日本語の
+CLAUDE.md の Conventions 節と `.claude/rules/docs-style.md`、AGENTS.md の
+「Documentation Writing」節の詳細版で、禁止語・日本語の
 AI 臭カタログ・セルフチェック手順をまとめる。**コードコメント・briefing 文言・
 `.fanout/` 出力は対象外**。
 

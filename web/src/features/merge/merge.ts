@@ -2,6 +2,7 @@ import type { MessageDescriptor } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
 import { errorBody } from "../../transport/api";
 import type { PRRef } from "../../transport/types";
+import { sameRepo } from "../sessions/stack";
 import type { MergeMethod } from "../settings/useSettings";
 
 /* サーバ契約の唯一の接点。エンドポイントと body の形が変わるならここだけを
@@ -43,11 +44,37 @@ function isOpen(pr: PRRef): boolean {
   return !isMerged(pr) && prState(pr) !== "CLOSED";
 }
 
+/* この PR より下にある未マージの層の番号。無ければ null。サーバの fenceChain /
+ * fenceNativeStack と同じ条件を snapshot で評価する: native stack は entries の
+ * 未マージ層、手で積んだ連鎖は「この PR の base を head に持つ、この repository の
+ * open PR」。others は snapshot にあるこの repository の PR。どの行にも載らない
+ * 下の層はここでは見えず、サーバの live 読み取りが 409 で返す。
+ *
+ * サーバは base が default branch なら連鎖を見ない(trunk から出た同期 PR で main
+ * へのマージが止まらないように)。snapshot は default branch を持たないので、ここは
+ * 見分けられない。issue 行が closing-issue link で trunk を head に持つ open PR を
+ * 載せていると、web はサーバより広く塞ぐ(押せないだけで、誤ってマージはしない)。 */
+export function layerBelow(pr: PRRef, others: readonly PRRef[], repo: string): number | null {
+  return nativeLayerBelow(pr) ?? chainLayerBelow(pr, others, repo);
+}
+
+function nativeLayerBelow(pr: PRRef): number | null {
+  const stack = pr.stack;
+  const hit = stack?.entries?.find((e) => e.position < stack.position && !isMerged(e.pr));
+  return hit?.pr.number ?? null;
+}
+
+function chainLayerBelow(pr: PRRef, others: readonly PRRef[], repo: string): number | null {
+  if (!pr.baseRef) return null;
+  const below = (o: PRRef) => isOpen(o) && o.headRef === pr.baseRef && sameRepo(o.headRepo, repo);
+  return others.find(below)?.number ?? null;
+}
+
 /* サーバの Preflight を通る見込みがあるか。行に複数 open PR があるとき、先頭が
  * draft や CONFLICTING だとそれだけが選ばれて唯一のボタンが永久に無効になる。 */
 function actionable(pr: PRRef): boolean {
   if (!isOpen(pr) || pr.isDraft || pr.mergeable === "CONFLICTING") return false;
-  return !pr.autoMerge && !pr.queued;
+  return !pr.autoMerge && !pr.queued && !pr.stack;
 }
 
 /* サーバの VerifyRowOwns と同じ所有権規則。ここで揃えないと、行に載った他人の
@@ -65,14 +92,18 @@ function ownedByRow(pr: PRRef, repo: string, branch: string): boolean {
  * 同じ理由で PrimaryPR を避けているので、こちらも open を先に採る。open が
  * 無いときは、所有している中の先頭に落ちる。
  *
- * branch は branch-backed 行の記録 branch、issue 行では ""。 */
+ * 下の層を待つ PR も後回しにする。1 つの行が stack の上下 2 層を持つとき、上の層を
+ * 選ぶと唯一のボタンが下の層を待って無効になり、マージできる下の層に届かない。
+ *
+ * branch は branch-backed 行の記録 branch、issue 行では ""。others は layerBelow
+ * に渡す、snapshot にあるこの repository の PR。 */
 export function mergeTargetPr(
   prs: PRRef[] | null | undefined,
-  repo: string,
-  branch: string,
+  { repo, branch, others }: { repo: string; branch: string; others: readonly PRRef[] },
 ): PRRef | null {
   const owned = (prs ?? []).filter((pr) => ownedByRow(pr, repo, branch));
-  return owned.find(actionable) ?? owned.find(isOpen) ?? owned[0] ?? null;
+  const ready = (pr: PRRef) => actionable(pr) && layerBelow(pr, others, repo) === null;
+  return owned.find(ready) ?? owned.find(actionable) ?? owned.find(isOpen) ?? owned[0] ?? null;
 }
 
 /* PR そのものを見て押せないと分かる状態。判定順は prDisplayState と揃える —
@@ -92,12 +123,20 @@ const PR_BLOCKS: { when: (pr: PRRef) => boolean; reason: MessageDescriptor }[] =
     when: (pr) => !!pr.autoMerge || !!pr.queued,
     reason: msg`GitHub がこの PR のマージを保留中です`,
   },
+  /* GitHub は native stack の層への `gh pr merge` を、最下層も含めて拒否する
+   * (2026-10-06 実測。async merge API を使えと返す)。押しても必ず 422 になる。 */
+  {
+    when: (pr) => !!pr.stack,
+    reason: msg`GitHub の native stack の層はダッシュボードからマージできません(GitHub でマージしてください)`,
+  },
 ];
 
 /* 押せない理由。押せるなら null。 */
 export function mergeBlockReason(
   pr: PRRef | null,
-  opts: { githubDegraded: boolean; pending: boolean; tokenless: boolean },
+  /* below は layerBelow の答え。途中層をマージすると、native stack では GitHub が
+   * 下の層ごとマージし、手で積んだ連鎖では trunk ではなく下の層の branch へ入る。 */
+  opts: { githubDegraded: boolean; pending: boolean; tokenless: boolean; below: number | null },
 ): MessageDescriptor | null {
   if (opts.pending) return msg`マージを送信しました。GitHub への反映を待っています`;
   if (!pr) return msg`マージ対象の PR がありません`;
@@ -105,7 +144,11 @@ export function mergeBlockReason(
    * 押せない理由をここで見せる。 */
   if (opts.tokenless) return msg`--no-token で起動したダッシュボードではマージできません`;
   if (opts.githubDegraded) return msg`GitHub の情報を取得できていません`;
-  return PR_BLOCKS.find((b) => b.when(pr))?.reason ?? null;
+  const intrinsic = PR_BLOCKS.find((b) => b.when(pr))?.reason;
+  if (intrinsic) return intrinsic;
+  if (opts.below)
+    return msg`下の層 #${{ pr: opts.below }} が未マージです(下の層からマージしてください)`;
+  return null;
 }
 
 /* 押せるが、押す前に知っておくべき状態。
@@ -158,6 +201,16 @@ export async function mergeErrorMessage(res: Response): Promise<MessageDescripto
   return detail
     ? msg`マージに失敗しました (HTTP ${{ status: res.status }}): ${{ detail }}`
     : msg`マージに失敗しました (HTTP ${{ status: res.status }})`;
+}
+
+/* この PR の head branch を base にしている、この repository の open PR の番号。無ければ
+ * null。サーバの branchInUse(ErrBranchIsBase)と同じ条件で、ある間は削除ボタンを無効に
+ * する — 消したときに GitHub がその PR を付け替えるか close するかは確かめていない。
+ * others は snapshot にあるこの repository の PR。 */
+export function prBasedOn(pr: PRRef, others: readonly PRRef[]): number | null {
+  if (!pr.headRef) return null;
+  const above = (o: PRRef) => o.number !== pr.number && isOpen(o) && o.baseRef === pr.headRef;
+  return others.find(above)?.number ?? null;
 }
 
 /* マージ済みの行にだけ出す、後片付けボタンの出せる条件。サーバの admission

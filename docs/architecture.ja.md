@@ -76,6 +76,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `dashboard`(`merge.go`) | mutation 経路(merge)。PR 特定・事前検証・gh 失敗のステータス写像 | H |
 | ui | `dashboard`(`deletebranch.go`) | mutation 経路(マージ後の head ref 削除)。所有権検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
+| ui | `dashboard`(`registry.go`) | ユーザーレベルの dashboard 登録・所有境界・生存検証 | H |
 | ui | `dashboard`(`diff.go`) | snapshot の安定 row identity で選んだ worktree diff の read-only 配信・request-wide 上限 | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane のみ。`plan.go` は plan mode かつ codex に限定) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
@@ -174,7 +175,8 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   サーバが snapshot 行の PR 集合との一致を確認し、GitHub 側が
   `--match-head-commit` で再確認する 3 段照合を必ず通す — どれか 1 段を外すと
   「画面で見ていた PR と実際にマージされる PR が違う」窓が開く。merged /
-  closed / draft / CONFLICTING は fanout が 409 で弾くが、レビュー承認と CI は
+  closed / draft / CONFLICTING と、下の層が未マージの stack の途中層は fanout が
+  409 で弾くが、レビュー承認と CI は
   弾かない(branch protection の強制は GitHub の役目で、二重実装すると保護
   ルールの無い repo でボタンが永久に死ぬ)。POST の入口は `postOnly` +
   `sameOriginOnly`(`Host` の完全一致で DNS rebinding を塞ぐ / `Origin` は存在時
@@ -203,7 +205,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   しか受け取らないので、同名 branch を持つ fork が混ざる)、`--limit` に達した
   一覧は打ち切りの可能性があるので「他に誰も使っていない」と読まずに拒否する。ref path の各セグメントは percent-encode する
   (`feature/#123` のような合法 ref が fragment で切れ、その 404 が「既に無い」と
-  誤認されるのを防ぐ)。
+  誤認されるのを防ぐ)。endpoint 単位の完全な不変条件カタログ(claims file、
+  queued merge の第二の終端、`ghRefreshedAt` フェンス、diff toolbar の pin、意図的に
+  残すギャップ)は `docs/dashboard-pr-mutations.ja.md`。
 - **`gh pr merge` の exit 0 はマージの証拠ではない**: merge queue 必須の base では
   gh は queue 投入で成功終了する。`PRState` で GitHub に実際の `mergedAt` を
   確認できるまで merged と報告しない。確認自体が失敗したときは fail-closed。送信が transport 失敗
@@ -309,10 +313,6 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `watch.IO` のような port 経由を優先する。具象 runtime adapter
   (`tmuxrun` / `tmuxbackend` / `herdrrun`)への辺だけは容認をやめ、
   godep-cruiser のルールで塞いだ。
-- `WorkspaceObservation` → `state.RuntimeResource` の投影が 3 箇所に
-  手書きされている(`panelaunch` の stateResource と `lifecycle` の 2 変種)。
-  path の `filepath.Clean` 有無が揃っておらず、共有投影を `state` 側に
-  1 本置けば畳める(コード内コメントでも追跡中)。
 - `PaneDecorator` は tmuxrun の setter 5 本の 1:1 転写で、呼び出し側が毎回
   5 連続 best-effort 呼びを並べる。`DecoratePane(PaneDecoration{...})` の
   構造体 1 発に畳む余地がある(tmux 側のみの整理で可)。

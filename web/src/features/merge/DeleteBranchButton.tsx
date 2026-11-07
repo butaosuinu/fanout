@@ -16,11 +16,15 @@ export function DeleteBranchButton({
   pr,
   query,
   token,
+  blockedBy,
 }: {
   id: string;
   pr: PRRef;
   query: Record<string, string>;
   token: string;
+  /* この branch を base にしている open PR(prBasedOn)。ある間はサーバが 409
+   * branch_is_base を返すので、押せる見た目にしない。 */
+  blockedBy: number | null;
 }) {
   const { i18n, t } = useLingui();
   const [state, setState] = useState<"idle" | "sending" | "done" | "error">("idle");
@@ -28,8 +32,12 @@ export function DeleteBranchButton({
 
   if (state === "done") return null;
 
+  const blocked = blockedBy
+    ? t`#${{ pr: blockedBy }} がこの branch を base にしているため削除できません`
+    : "";
+
   const run = () => {
-    if (state === "sending") return;
+    if (state === "sending" || blocked) return;
     setState("sending");
     void postJson(DELETE_BRANCH_PATH, token, {
       params: query,
@@ -49,10 +57,18 @@ export function DeleteBranchButton({
       });
   };
 
-  const label = t`${{ branch: pr.headRef ?? "" }} を削除`;
+  const label = blocked || t`${{ branch: pr.headRef ?? "" }} を削除`;
   return (
     <span className="d-branch-delete">
-      <button type="button" id={id} className="btn-quiet tip" data-tip={label} onClick={run}>
+      <button
+        type="button"
+        id={id}
+        className="btn-quiet tip"
+        aria-disabled={blocked ? true : undefined}
+        aria-label={blocked ? t`ブランチを削除 — ${{ reason: blocked }}` : undefined}
+        data-tip={label}
+        onClick={run}
+      >
         {state === "sending" ? t`削除中…` : t`ブランチを削除`}
       </button>
       {state === "error" && (

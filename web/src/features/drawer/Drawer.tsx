@@ -7,7 +7,7 @@ import { usePeek } from "../../transport/usePeek";
 import { usePlan } from "../../transport/usePlan";
 import { fmtCreated, parseDiff } from "../../shared/format";
 import { issueUrl } from "../../shared/github";
-import { canDeleteBranch } from "../merge/merge";
+import { canDeleteBranch, prBasedOn } from "../merge/merge";
 import { DeleteBranchButton } from "../merge/DeleteBranchButton";
 import { MergeSplitButton } from "../merge/MergeSplitButton";
 import { useMergeSlot } from "../merge/MergeSlot";
@@ -35,7 +35,10 @@ import {
   PrPill,
   PrReviewTag,
 } from "../sessions/badges";
+import { groupPrs } from "../sessions/stack";
+import { useStackIndex } from "../sessions/StackIndex";
 import { GhLink } from "../../ui/Tag";
+import { StackMap } from "./StackMap";
 
 /* 上部バーの「変更を表示」に添える差分行数。解析できない(`-` など)ときは出さない */
 function DiffStat({ summary }: { summary?: string }) {
@@ -120,20 +123,21 @@ function WaveSection({ pane, repo }: { pane: PaneView; repo: string }) {
   );
 }
 
-/* ドロワーの PR 1 件。タグはどれも該当しなければ null を返すので、ここに条件分岐は
- * 置かない。区切りの空白は不要 — .d-prs li が flex + gap を持っている。 */
-function PrRow({
-  pr,
-  repo,
-  cleanup,
-}: {
-  pr: PRRef;
-  repo: string;
-  /* マージ後の後片付け導線。出せる行にだけ渡る。 */
-  cleanup: { query: Record<string, string>; token: string; branch: string } | null;
-}) {
+/* マージ後の後片付け導線。出せる行にだけ渡る。others は snapshot にあるこの repository
+ * の PR で、削除ボタンの無効化(prBasedOn)に使う。 */
+type Cleanup = {
+  query: Record<string, string>;
+  token: string;
+  branch: string;
+  others: readonly PRRef[];
+} | null;
+
+/* ドロワーの PR 1 件ぶんの信号。タグはどれも該当しなければ null を返すので、ここに
+ * 条件分岐は置かない。区切りの空白は不要 — .d-prs li が flex + gap を持っている。
+ * 平坦な行と stack map の自分の層が共有する。 */
+function PrSignals({ pr, repo, cleanup }: { pr: PRRef; repo: string; cleanup: Cleanup }) {
   return (
-    <li>
+    <>
       <PrPill repo={repo} pr={pr} />
       <PrCiTag ci={pr.ci} />
       <PrConflictTag pr={pr} />
@@ -145,9 +149,10 @@ function PrRow({
           pr={pr}
           query={cleanup.query}
           token={cleanup.token}
+          blockedBy={prBasedOn(pr, cleanup.others)}
         />
       )}
-    </li>
+    </>
   );
 }
 
@@ -162,18 +167,24 @@ function PrsSection({
   parent: string;
   token: string;
 }) {
-  const prs = pane.prs ?? [];
+  const stacks = useStackIndex();
+  const groups = groupPrs(pane.prs ?? [], stacks);
   const query = rowQuery(parent, pane);
-  const cleanup = query ? { query, token, branch: pane.branchName ?? "" } : null;
+  const others = [...stacks.prs.values()].map((hit) => hit.pr);
+  const cleanup = query ? { query, token, branch: pane.branchName ?? "", others } : null;
+  const renderOwn = (pr: PRRef) => <PrSignals pr={pr} repo={repo} cleanup={cleanup} />;
   return (
     <section className="d-sec">
       <h4>pull requests</h4>
       <ul className="d-prs" id="d-prs">
-        {prs.length ? (
-          prs.map((pr) => <PrRow key={pr.number} pr={pr} repo={repo} cleanup={cleanup} />)
-        ) : (
-          <li className="muted">—</li>
+        {groups.map((g) =>
+          "stack" in g ? (
+            <StackMap key={g.key} view={g.stack} pane={pane} repo={repo} renderOwn={renderOwn} />
+          ) : (
+            <li key={g.key}>{renderOwn(g.pr)}</li>
+          ),
         )}
+        {!groups.length && <li className="muted">—</li>}
       </ul>
     </section>
   );
