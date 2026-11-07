@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/errs"
 )
 
 type OwnedOptions struct {
@@ -59,6 +60,31 @@ func (s *OwnedSession) AttachForms(baseEnvironment []string) (string, corebacken
 		Env:  mergeAttachEnvironment(baseEnvironment, assignments),
 	}
 	return renderAttachCommand(m, assignments), spec, nil
+}
+
+// TerminalAttachExec revalidates the saved route and exact live terminal before
+// exposing the pinned client process image.
+func (s *OwnedSession) TerminalAttachExec(target corebackend.OwnedPaneIdentity, baseEnvironment []string) (_ corebackend.AttachExec, err error) {
+	defer errs.Wrap(&err, "build owned Herdr terminal attach")
+	if s == nil || s.backend == nil {
+		return corebackend.AttachExec{}, fmt.Errorf("herdr owned session is nil")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*commandTimeout)
+	defer cancel()
+	var spec corebackend.AttachExec
+	err = s.backend.withOwnedAdmission(ctx, ownedOperationLane, nil, func(call ownedCall) error {
+		if _, _, resolveErr := call.resolveOwnedTarget(ctx, target); resolveErr != nil {
+			return resolveErr
+		}
+		marker := call.admission.marker
+		spec = corebackend.AttachExec{
+			Path: marker.BinaryPath,
+			Argv: []string{marker.BinaryPath, "terminal", "attach", target.TerminalID},
+			Env:  mergeAttachEnvironment(baseEnvironment, attachAssignments(marker)),
+		}
+		return nil
+	})
+	return spec, err
 }
 
 func renderAttachCommand(m ownerMarker, assignments [][2]string) string {

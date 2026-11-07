@@ -69,6 +69,9 @@ func (m model) runtimeActionDisabledReason(pane *paneView, action string) string
 	if reason != "" {
 		return reason
 	}
+	if pane == nil && strings.TrimSpace(action) == "launch" && m.opts.LaunchActionDisabled != nil {
+		return strings.TrimSpace(m.opts.LaunchActionDisabled())
+	}
 	if !herdrInteractiveActionSupported(action) {
 		return herdrActionDisabledReason(action)
 	}

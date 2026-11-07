@@ -81,7 +81,9 @@ watcher の launch、TUI の launch / focus / peek、`--merge` / `--close` /
 `--cleanup`、`--team` のメッセージングは使えます。対話 send、restore、plan
 capture は使えません。focus には `herdr integration install claude` / `codex`
 も必要です。照合する agent session を報告するのは、このコマンドが agent 設定へ
-書き込む hook だからです。
+書き込む hook だからです。foreign または `default` の herdr console でも、記録済み
+行の操作は無効のままですが、`n` から repository-owned session に作業を起動し、
+最初の terminal へ直接 attach できます。
 
 ## クイックスタート
 

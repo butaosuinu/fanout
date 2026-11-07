@@ -73,7 +73,7 @@ func (l *Launcher) launchManaged(req Request) (Result, bool) {
 	}
 	l.reportManagedSidebarMetadata(req, intent)
 	l.Log.Ok("%s: pane %s created in %s", paneLogLabel(req), live.Ref.Pane, intent.WorktreePath)
-	return Result{PaneID: live.Ref.Pane, Notice: launchNotice(req)}, true
+	return recordedLaunchResult(operation.locked, req, live.Ref.Pane), true
 }
 
 type managedLaunchOperation struct {

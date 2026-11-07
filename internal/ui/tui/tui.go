@@ -83,11 +83,13 @@ type Options struct {
 	// The owned-session ports receive the exact persisted identity. The
 	// composition root must bind it to this repository's owned session before
 	// each action.
-	ManagedActionDisabled func(state.Pane) string
-	FocusManagedPane      func(state.Pane) error
-	CaptureManagedPane    func(state.Pane, int) (string, error)
-	ListLive              func() ([]backend.LivePane, error)
-	ClosePane             func(backend.PaneRef) error
+	LaunchActionDisabled     func() string
+	PrepareCreatedPaneAttach CreatedPaneAttachFunc
+	ManagedActionDisabled    func(state.Pane) string
+	FocusManagedPane         func(state.Pane) error
+	CaptureManagedPane       func(state.Pane, int) (string, error)
+	ListLive                 func() ([]backend.LivePane, error)
+	ClosePane                func(backend.PaneRef) error
 	// LifecycleCloseOwned is the runtime-specific destructive capability used
 	// for state-backed closes. It keeps identity verification isolated from the
 	// mixed-backend display collector.
@@ -160,6 +162,7 @@ type model struct {
 	notifications     map[issueKey]issueTransitionSnapshot
 	notifyPrimed      bool
 	keyboardPaused    bool
+	terminalInput     fdReader
 	quitAfterLaunch   bool
 	relayoutGen       int
 	promptOnly        bool
@@ -250,6 +253,7 @@ func Run(opts Options) error {
 		return err
 	}
 	defer closeInput()
+	m.terminalInput = input.src
 	defer keyboard.Disable()
 	_, err = tea.NewProgram(
 		m,

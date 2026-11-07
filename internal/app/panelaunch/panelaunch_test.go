@@ -43,6 +43,18 @@ func newNonTmuxBackend() *backendtest.FreshCloserFake {
 	)
 }
 
+func TestRecordedLaunchResultKeepsLockHeldLaunchGeneration(t *testing.T) {
+	locked := &state.LockedStore{Store: state.Store{Panes: []state.Pane{{
+		Parent: "500", IssueNum: 501, Backend: backend.Herdr, PaneID: "w1:p1",
+		SessionID: "s1", LaunchNonce: "launch-first",
+	}}}}
+	result := recordedLaunchResult(locked, Request{ParentRef: "500", Number: 501}, "w1:p1")
+	locked.Store.Panes[0].LaunchNonce = "launch-replacement"
+	if result.Binding.Launch.Nonce != "launch-first" || result.Binding.Row.IssueNum != 501 {
+		t.Fatalf("binding = %+v, want lock-held launch-first generation", result.Binding)
+	}
+}
+
 func TestManualPromptWithBriefingActionPreservesTrailingMention(t *testing.T) {
 	// A prompt ending in an @-mention must keep a whitespace terminator before
 	// the appended sentence, else "@cmd/main.go" + ". read" merges into the

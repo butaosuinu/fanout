@@ -12,6 +12,7 @@ import (
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 )
 
+//nolint:gocognit,gocyclo,funlen // Bubble Tea routes the full closed message union through one ordered state-machine dispatcher.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case keyboardProtocolsEnabledMsg:
@@ -309,6 +310,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		reloadCmd := m.loadStateCmd(false)
 		return m, m.postLaunchFocusCmd(msg, reloadCmd)
+	case createdPaneAttachPreparedMsg:
+		if msg.err != nil {
+			m.notice = appendFocusNotice(msg.contextNotice, fmt.Sprintf("attach skipped for %s: %v", dash(msg.binding.Ref.Pane), msg.err))
+			return m, nil
+		}
+		attachCmd, err := m.execCreatedPaneAttach(msg)
+		if err != nil {
+			m.notice = appendFocusNotice(msg.contextNotice, fmt.Sprintf("attach skipped for %s: %v", dash(msg.binding.Ref.Pane), err))
+			return m, nil
+		}
+		return m, attachCmd
+	case createdPaneAttachDoneMsg:
+		m.keyboardPaused = false
+		if msg.err != nil {
+			m.notice = appendFocusNotice(msg.contextNotice, fmt.Sprintf("attach failed for %s: %v", dash(msg.paneID), msg.err))
+			return m, nil
+		}
+		m.notice = appendFocusNotice(msg.contextNotice, fmt.Sprintf("detached from %s; returned to fanout tui", msg.paneID))
+		return m, nil
 	case newPanePromptMsg:
 		m.newPanePopupOpen = false
 		if msg.err != nil {
@@ -532,6 +552,14 @@ func (m *model) postLaunchFocusCmd(msg launchPaneMsg, reloadCmd tea.Cmd) tea.Cmd
 	}
 	if binding, ok := exactFirstCreatedBinding(msg.createdPaneIDs, msg.createdBindings); ok {
 		return tea.Batch(reloadCmd, m.focusCreatedBindingCmd(binding, m.notice))
+	}
+	if m.opts.PrepareCreatedPaneAttach != nil {
+		notice := "focus skipped: created pane binding is unavailable"
+		if len(msg.createdBindings) > 0 {
+			notice = "focus skipped: created pane bindings do not match creation order"
+		}
+		m.notice = appendFocusNotice(m.notice, notice)
+		return reloadCmd
 	}
 	if len(msg.createdBindings) > 0 || m.selectedBackend() == backend.Herdr {
 		m.notice = appendFocusNotice(m.notice, "focus skipped: exact created pane identity is unavailable")

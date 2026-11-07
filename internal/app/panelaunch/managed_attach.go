@@ -42,7 +42,7 @@ func (l *Launcher) attachManaged(
 		return l.failManaged(req, "finalize attached agent", err)
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), live.Ref.Pane, targetPath)
-	return Result{PaneID: live.Ref.Pane, Notice: launchNotice(req)}, true
+	return recordedLaunchResult(locked, req, live.Ref.Pane), true
 }
 
 func (l *Launcher) prepareManagedAttachedIntent(

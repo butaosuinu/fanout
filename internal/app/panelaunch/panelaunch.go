@@ -97,11 +97,13 @@ func (r Request) CodexPlanMode() bool {
 	return r.PlanMode() && r.Agent == "codex"
 }
 
-// Result identifies the runtime pane created by a successful launch. PaneID is
-// empty for successful dry runs because no pane is created.
+// Result identifies the runtime pane created by a successful launch. Binding
+// is the exact persisted row projection used for post-launch focus or attach.
+// Both fields are empty for successful dry runs because no pane is created.
 type Result struct {
-	PaneID string
-	Notice string
+	PaneID  string
+	Binding backend.PaneBinding
+	Notice  string
 }
 
 // ManualOptions parameterizes NewManualRequest.
@@ -277,7 +279,7 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		return Result{}, false
 	}
 	l.Log.Ok("%s: pane %s created in %s", paneLogLabel(req), paneID, prepared.WorktreePath)
-	return Result{PaneID: paneID, Notice: launchNotice(req)}, true
+	return recordedLaunchResult(l.Recorder, req, paneID), true
 }
 
 // writeBriefing creates the briefing directory and writes req.BriefingBody to
@@ -379,7 +381,31 @@ func (l *Launcher) attachDirect(req Request, targetPath string) (Result, bool) {
 		return Result{}, false
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), paneID, targetPath)
-	return Result{PaneID: paneID, Notice: launchNotice(req)}, true
+	return recordedLaunchResult(l.Recorder, req, paneID), true
+}
+
+func recordedLaunchResult(recorder StateRecorder, req Request, paneID string) Result {
+	result := Result{PaneID: paneID, Notice: launchNotice(req)}
+	locked, ok := recorder.(*state.LockedStore)
+	if !ok {
+		return result
+	}
+	result.Binding = launchBindingFromStore(locked.Store, req, paneID)
+	return result
+}
+
+func launchBindingFromStore(store state.Store, req Request, paneID string) backend.PaneBinding {
+	var pane state.Pane
+	var ok bool
+	if req.TaskID != "" {
+		pane, ok = store.FindTask(req.ParentRef, req.TaskID)
+	} else {
+		pane, ok = store.Find(req.ParentRef, req.Number)
+	}
+	if !ok || pane.PaneID != paneID {
+		return backend.PaneBinding{}
+	}
+	return pane.RuntimeBinding()
 }
 
 func (l *Launcher) waitAttachedCodexPlan(

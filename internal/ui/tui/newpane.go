@@ -52,14 +52,19 @@ type LaunchRequest struct {
 	WorkerAgent string
 }
 
-// LaunchResult reports the panes created by a successful TUI launch. Pane IDs
-// and their persisted bindings stay in creation order so post-launch focus can
-// resolve the exact recorded row instead of trusting a runtime-scoped ID.
+// LaunchResult reports the panes created by a successful TUI launch. IDs and
+// exact persisted bindings stay in creation order so post-launch navigation
+// never authorizes a target from a backend-scoped pane ID alone.
 type LaunchResult struct {
 	Notice          string
 	CreatedPaneIDs  []string
 	CreatedBindings []backend.PaneBinding
 }
+
+// CreatedPaneAttachFunc resolves a saved launch binding to one verified
+// interactive process image. The TUI runs it without a shell and resumes when
+// that process exits.
+type CreatedPaneAttachFunc func(backend.PaneBinding) (backend.AttachExec, error)
 
 // LaunchFunc creates a manual fanout pane for a TUI request.
 type LaunchFunc func(LaunchRequest) (LaunchResult, error)
