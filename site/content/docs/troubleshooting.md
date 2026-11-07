@@ -100,7 +100,7 @@ Items can look fewer than expected, but that's expected behavior: a Project with
 
 ## "herdr named session ... is not running"
 
-This error belongs to observation of an external [herdr backend]({{< relref "/docs/herdr-backend" >}}) session. Start that explicitly named session in herdr, then verify it from the same shell (`default` is rejected):
+This error belongs to observation of an explicitly named external [herdr backend]({{< relref "/docs/herdr-backend" >}}) session. Start that session in herdr, then verify it from the same shell. fanout skips an empty or `default` ambient session instead of polling it:
 
 ```bash
 herdr status --json   # server and session state
@@ -123,4 +123,4 @@ fanout does not preflight methods or response fields. `herdr method "<name>" is 
 
 ## "herdr backend interactive TUI action is unavailable"
 
-Not a fault. In fanout's owned session, interactive launch, focus, and peek are available for rows whose complete saved identity still matches the live pane, and merge, close, and cleanup run against verified worktree rows. The message remains for foreign or incomplete rows and for the unsupported send, restore, and plan-capture operations. Codex child Plan Mode runs through fanout's app-server controller and owned launcher. A conflicting backend on a parent with recorded panes still fails with `explicit migration is required`; there is no backend migration command. See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for the capability table.
+Not a fault. In fanout's owned session, interactive launch, focus, and peek are available for rows whose complete saved identity still matches the live pane, and merge, close, and cleanup run against verified worktree rows. In a foreign or `default` console, new-session `n` is the only exception: it creates work in the repository-owned session and directly attaches the first terminal. The message remains for recorded-row actions and the unsupported send, restore, and plan-capture operations. Codex child Plan Mode runs through fanout's app-server controller and owned launcher. A conflicting backend on a parent with recorded panes still fails with `explicit migration is required`; there is no backend migration command. See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for the capability table.

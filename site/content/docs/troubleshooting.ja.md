@@ -120,8 +120,8 @@ items が想定より少なく見えることがありますが、Status フィ�
 
 ## "herdr named session ... is not running"
 
-このエラーは、外部の [herdr backend]({{< relref "/docs/herdr-backend" >}}) session を観測する経路のものです。
-herdr 側で名前付き session を起動し、同じシェルから確認してください。`default` は拒否されます。
+このエラーは、明示的に名前を持つ外部の [herdr backend]({{< relref "/docs/herdr-backend" >}}) session を観測する経路のものです。
+herdr 側でその session を起動し、同じシェルから確認してください。空または `default` の ambient session は poll せずに読み飛ばします。
 
 ```bash
 herdr status --json   # server と session の状態
@@ -152,7 +152,8 @@ fanout は method と response field を事前検査しません。`herdr method
 
 故障ではありません。
 fanout-owned session では、完全な保存済み identity が live pane と一致する行に限り、対話 launch、focus、peek を使えます。検証済みの worktree 行には merge、close、cleanup も実行できます。
-このメッセージは foreign または identity が不完全な行と、未対応の send、restore、plan capture に引き続き適用されます。
+foreign または `default` の console では、新規 Session の `n` だけが例外です。repository-owned session に作業を起動し、最初の terminal へ直接 attach します。
+このメッセージは記録済み行の操作と、未対応の send、restore、plan capture に引き続き適用されます。
 Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。
 記録済みペインを持つ親への矛盾する backend 指定は、引き続き `explicit migration is required` で失敗します。backend の移行コマンドはありません。
 機能の対応表は [herdr backend]({{< relref "/docs/herdr-backend" >}}) にあります。

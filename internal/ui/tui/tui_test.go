@@ -5815,13 +5815,13 @@ func TestSameCreatedPaneBindingAdmitsFirstAgentSessionOnlyForRecordedAgent(t *te
 	current.AgentSession = &backend.AgentSessionRef{
 		Source: backend.AgentSessionSource("codex"), Agent: "codex", Kind: "id", Value: "session-1",
 	}
-	if !sameCreatedPaneBinding(launched, current) {
+	if !launched.SameLaunchTarget(current) {
 		t.Fatal("first agent session did not match its exact launch binding")
 	}
 	current.AgentSession = &backend.AgentSessionRef{
 		Source: backend.AgentSessionSource("claude"), Agent: "claude", Kind: "id", Value: "session-1",
 	}
-	if sameCreatedPaneBinding(launched, current) {
+	if launched.SameLaunchTarget(current) {
 		t.Fatal("foreign agent session matched the launch binding")
 	}
 }

@@ -153,24 +153,19 @@ func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cl
 	return result.Notice, err
 }
 
-type tuiPaneLaunchResult struct {
-	panelaunch.Result
-	Binding backend.PaneBinding
-}
-
 // launchStandaloneIssuePaneWithResult is the TUI-facing standalone launch
 // path. The watcher keeps the notice-and-error wrapper above so background
 // launches never gain foreground-focus behavior.
-func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (tuiPaneLaunchResult, error) {
+func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (panelaunch.Result, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
-		return tuiPaneLaunchResult{}, err
+		return panelaunch.Result{}, err
 	}
 	store, recorder, code := run.LoadState(cfg.DryRun, rt, launchLogger)
 	if code != exitcode.OK {
-		return tuiPaneLaunchResult{}, bufferedLaunchError(stdout, stderr, "load fanout state")
+		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "load fanout state")
 	}
 	if recorder != nil {
 		defer func() {
@@ -178,19 +173,16 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 		}()
 	}
 	if err := admitStandaloneIssueRuntime(projectRoot, cfg, rt, store, issue.Number); err != nil {
-		return tuiPaneLaunchResult{}, err
+		return panelaunch.Result{}, err
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.LaunchWithResult(req)
 	if !ok {
-		return tuiPaneLaunchResult{}, bufferedLaunchError(stdout, stderr, "create watch pane")
+		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "create watch pane")
 	}
 	result.Notice = combinedLaunchNotice([]string{result.Notice}, bufferedLaunchNotice(stderr))
-	if recorder != nil {
-		store = recorder.Store
-	}
-	return tuiPaneLaunchResult{Result: result, Binding: tuiLaunchBinding(store, req, result.PaneID)}, nil
+	return result, nil
 }
 
 func admitStandaloneIssueRuntime(projectRoot string, cfg *cliflags.Config, rt *run.Runtime, store state.Store, issueNum int) error {
@@ -297,13 +289,9 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 			return ready(store, recorder, rt.Backend, rt.Managed)
 		}
 	}
-	var launchStore state.Store
-	var launchStoreCaptured bool
 	var runAfter run.IssueAfterFunc
 	if after != nil {
 		runAfter = func(store state.Store, recorder panelaunch.StateRecorder, progress run.IssueAfterContext) error {
-			launchStore = cloneTUILaunchStore(store)
-			launchStoreCaptured = true
 			return after(store, recorder, rt.Backend, rt.Managed, progress)
 		}
 	}
@@ -315,33 +303,15 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, runtimeDashboardKeyBinder(rt), *input, runReady, runAfter)
 	}
 	result := parentIssueFanoutResult{
-		CreatedPaneIDs:  execution.CreatedPaneIDs,
-		CreatedBindings: tuiIssueBindings(launchStore, launchStoreCaptured, cfg.ParentRef, execution.CreatedIssueNums, execution.CreatedPaneIDs),
-		Notice:          combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
-		runtimeBackend:  rt.Backend,
-		managed:         rt.Managed,
+		CreatedPaneIDs: execution.CreatedPaneIDs, CreatedBindings: execution.CreatedBindings,
+		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
+		runtimeBackend: rt.Backend, managed: rt.Managed,
 	}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")
 	}
 	result.Watch = watchParentLaunchResult(execution.Plan, execution.CreatedIssueNums)
 	return result, nil
-}
-
-func cloneTUILaunchStore(store state.Store) state.Store {
-	store.Panes = append([]state.Pane(nil), store.Panes...)
-	return store
-}
-
-func tuiIssueBindings(store state.Store, captured bool, parent string, issueNums []int, paneIDs []string) []backend.PaneBinding {
-	bindings := make([]backend.PaneBinding, len(paneIDs))
-	if !captured || len(issueNums) != len(paneIDs) {
-		return bindings
-	}
-	for i, issueNum := range issueNums {
-		bindings[i] = tuiLaunchBinding(store, panelaunch.Request{ParentRef: parent, Number: issueNum}, paneIDs[i])
-	}
-	return bindings
 }
 
 func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int) *cliflags.Config {

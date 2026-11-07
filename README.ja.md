@@ -81,7 +81,9 @@ watcher の launch、TUI の launch / focus / peek、`--merge` / `--close` /
 `--cleanup`、`--team` のメッセージングは使えます。対話 send、restore、plan
 capture は使えません。focus には `herdr integration install claude` / `codex`
 も必要です。照合する agent session を報告するのは、このコマンドが agent 設定へ
-書き込む hook だからです。
+書き込む hook だからです。foreign または `default` の herdr console でも、記録済み
+行の操作は無効のままですが、`n` から repository-owned session に作業を起動し、
+最初の terminal へ直接 attach できます。
 
 ## クイックスタート
 
@@ -202,7 +204,7 @@ flag を生成します。詳しくは
 
 ## 開発要件
 
-チェックアウトからビルドする場合は Go 1.26.9+、Node.js 24+、pnpm 11+ が
+チェックアウトからビルドする場合は Go 1.26.10+、Node.js 24+、pnpm 11+ が
 必要です(curl インストールはビルド済みバイナリを配るのでいずれも不要)。
 
 ## 開発

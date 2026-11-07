@@ -386,6 +386,7 @@ func wireHostedConsoleTUI(
 	lg *log.Logger,
 ) func() {
 	popupHost := newTUIPopupHost(runtimeBackend, os.Getenv(invokingPaneEnv))
+	opts.PrepareCreatedPaneAttach = newTUICreatedPaneAttachFunc(projectRoot)
 	opts.LaunchPane = newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig)
 	opts.NewPanePrompt = newTUINewPanePromptFunc(popupHost, projectRoot, commandName)
 	opts.HelpPopup = newTUIHelpPopupFunc(popupHost, projectRoot, commandName)
@@ -457,36 +458,35 @@ func wireManagedConsoleTUI(
 	owned paneruntime.ManagedSession,
 	dashboardOwnerSync func(),
 ) {
+	opts.LaunchActionDisabled = func() string { return "" }
 	opts.ManagedActionDisabled = func(pane state.Pane) string {
 		return managedActionDisabled(owned, pane)
 	}
+	wireManagedNewSessionTUI(
+		opts, projectRoot, session, commandName, resolvedSettings, hookConfig,
+	)
 	if owned == nil {
+		opts.PrepareCreatedPaneAttach = newTUICreatedPaneAttachFunc(projectRoot)
 		return
 	}
-	wireManagedLaunchTUI(
-		opts, projectRoot, session, commandName, resolvedSettings, hookConfig, owned,
-		dashboardOwnerSync,
-	)
+	opts.LaunchAttach = newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig)
+	opts.LaunchShell = newManagedLaunchShellFunc(projectRoot, owned)
+	wrapManagedTUILaunches(opts, dashboardOwnerSync)
 	wireManagedPaneTUI(opts, projectRoot, owned)
 }
 
-func wireManagedLaunchTUI(
+func wireManagedNewSessionTUI(
 	opts *fanouttui.Options,
 	projectRoot, session, commandName string,
 	resolvedSettings settings.Settings,
 	hookConfig hooks.Config,
-	owned paneruntime.ManagedSession,
-	dashboardOwnerSync func(),
 ) {
 	opts.LaunchPane = newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig)
-	opts.LaunchAttach = newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig)
 	opts.ListOpenIssues = newTUIListOpenIssuesFunc(projectRoot)
 	opts.ListIssueChildren = newTUIListIssueChildrenFunc(projectRoot)
 	opts.LaunchIssue = newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig)
 	opts.LaunchIssuePlan = newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig)
 	opts.OpenIssue = newTUIOpenIssueFunc(projectRoot)
-	opts.LaunchShell = newManagedLaunchShellFunc(projectRoot, owned)
-	wrapManagedTUILaunches(opts, dashboardOwnerSync)
 }
 
 func wireManagedPaneTUI(opts *fanouttui.Options, projectRoot string, owned paneruntime.ManagedSession) {
@@ -584,7 +584,7 @@ func reloadTUISettings(
 		Watcher: watcher, WatchInterval: interval, WatchLabel: label,
 		WatcherRunningLabel: resolved.WatcherRunningLabel, Notifier: notifier,
 		LaunchIssue: reloadedTUIIssueLauncher(
-			interactiveLaunch, projectRoot, session, commandName, resolved, hookConfig, dashboardOwnerSync,
+			projectRoot, session, commandName, resolved, hookConfig, dashboardOwnerSync,
 		),
 	}, nil
 }
@@ -603,15 +603,11 @@ func syncTUIReloadKeys(hosted bool, owned paneruntime.ManagedSession, projectRoo
 }
 
 func reloadedTUIIssueLauncher(
-	enabled bool,
 	projectRoot, session, commandName string,
 	resolved settings.Settings,
 	hookConfig hooks.Config,
 	dashboardOwnerSync func(),
 ) fanouttui.IssueLaunchFunc {
-	if !enabled {
-		return nil
-	}
 	launch := newTUIIssueLaunchFunc(projectRoot, session, commandName, resolved, hookConfig)
 	return func(issueNum int, defaultAgent string, overrides map[string]string) (fanouttui.LaunchResult, error) {
 		result, err := launch(issueNum, defaultAgent, overrides)

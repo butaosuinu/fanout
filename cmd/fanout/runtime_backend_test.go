@@ -51,6 +51,30 @@ func TestResolveBackendSelectionNestedHerdrWinsTmuxContext(t *testing.T) {
 	}
 }
 
+func TestResolveTUILaunchRuntimeRejectsStickyRuntimeOutsideDisplayHost(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:  "425",
+		Backend: backend.Tmux,
+		PaneID:  "%9",
+	})
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SESSION", "foreign")
+	t.Setenv("HERDR_SOCKET_PATH", filepath.Join(t.TempDir(), "runtime.sock"))
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+
+	cfg := &cliflags.Config{ParentRef: "425", TUIInteractive: true}
+	_, err := resolveTUILaunchRuntime(repo, "", cfg)
+	if err == nil || !strings.Contains(err.Error(), "runtime backend for parent 425 is tmux; --backend requests herdr") {
+		t.Fatalf("resolveTUILaunchRuntime() error = %v, want display-host stickiness conflict", err)
+	}
+	if cfg.Backend != "" {
+		t.Fatalf("caller backend = %q, want unchanged", cfg.Backend)
+	}
+}
+
 func TestResolveBackendSelectionCarriesProvisionalIntents(t *testing.T) {
 	got, err := resolveBackendSelection("425", paneruntime.Inputs{
 		TmuxEnvironment: true,
@@ -880,6 +904,28 @@ func TestRuntimeReadRoutesUseAmbientHerdrWithoutSavedRoute(t *testing.T) {
 		if !wantWithTUIHost[route] {
 			t.Fatalf("unexpected TUI route %+v; all routes=%+v", route, routes)
 		}
+	}
+}
+
+func TestRuntimeReadRoutesOmitDefaultAmbientHerdr(t *testing.T) {
+	for _, session := range []string{"", "default"} {
+		t.Run("session="+session, func(t *testing.T) {
+			repo := initLifecycleRepo(t)
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("FANOUT_BACKEND", "")
+			t.Setenv("HERDR_ENV", "1")
+			t.Setenv("HERDR_SESSION", session)
+			t.Setenv("HERDR_SOCKET_PATH", "/tmp/default.sock")
+			t.Setenv("TMUX", "")
+
+			routes, err := runtimeReadRoutes(repo, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(routes) != 0 {
+				t.Fatalf("routes = %+v, want no default ambient route", routes)
+			}
+		})
 	}
 }
 

@@ -41,6 +41,10 @@ H パッケージから M/A へ `git mv` しても軽く扱わない。
 doc パッケージ表が正典で、`SourceExtra` は正典が触れていないパスを埋める側 —
 どちらのソースも classifyPath の評価順では区別しない。
 
+外部エージェント spike の `internal/infra/agentlog/testdata/` と
+`internal/infra/procscan/testdata/` は、採取 fixtures に限る M の補完ルールで分類する。
+親ディレクトリの Go 実装は分類せず、実装時にパッケージ表とルールを追加する。
+
 ### 意図的な非対称
 
 `cmd/fanout/` と `internal/ui/tui/` には catch-all prefix rule がある

@@ -1,0 +1,22 @@
+{
+  "session": [
+    {
+      "id": "ses_fixture001",
+      "directory": "/fixture/work",
+      "version": "1.18.34",
+      "agent": "build",
+      "model": "{\"id\":\"missing\",\"providerID\":\"spike\",\"variant\":\"default\"}",
+      "time_created": 1793082115896,
+      "time_updated": 1793082115926
+    }
+  ],
+  "message": [
+    {
+      "id": "msg_fixture001",
+      "session_id": "ses_fixture001",
+      "time_created": 1793082115912,
+      "time_updated": 1793082115924,
+      "data": "{\"role\":\"user\",\"time\":{\"created\":1793082115912},\"agent\":\"build\",\"model\":{\"providerID\":\"spike\",\"modelID\":\"missing\"}}"
+    }
+  ]
+}

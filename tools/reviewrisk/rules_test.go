@@ -118,6 +118,10 @@ func TestClassifyPath(t *testing.T) {
 		{name: "tests bin yardstick is H", path: "tests/bin/gh", want: ClassH, found: true},
 		{name: "tests bats suite is M", path: "tests/bats/status.bats", want: ClassM, found: true},
 		{name: "tests golden is M", path: "tests/golden/scenario-plan.txt", want: ClassM, found: true},
+		{name: "agentlog fixtures are M", path: "internal/infra/agentlog/testdata/codex/exec-rollout.jsonl", want: ClassM, found: true},
+		{name: "procscan fixtures are M", path: "internal/infra/procscan/testdata/ps-linux.txt", want: ClassM, found: true},
+		{name: "agentlog implementation stays unclassified", path: "internal/infra/agentlog/read.go", found: false},
+		{name: "procscan implementation stays unclassified", path: "internal/infra/procscan/scan.go", found: false},
 		{name: "site is NONE", path: "site/content/docs/index.md", want: ClassNone, found: true},
 		{name: "hack is M", path: "hack/release.sh", want: ClassM, found: true},
 

@@ -172,12 +172,18 @@ func (m *model) focusPaneIDCmd(paneID, contextNotice string) tea.Cmd {
 func (m *model) focusCreatedBindingCmd(binding backend.PaneBinding, contextNotice string) tea.Cmd {
 	switch backend.NormalizeName(binding.Ref.Backend) {
 	case backend.Herdr:
+		if m.opts.PrepareCreatedPaneAttach != nil {
+			return m.prepareCreatedPaneAttachCmd(binding, contextNotice)
+		}
 		return m.focusFreshHerdrBindingCmd(binding, contextNotice)
 	case backend.Tmux:
 		return m.focusPaneCmd(paneView{PaneID: binding.Ref.Pane, TmuxState: "live"}, false, contextNotice)
 	default:
 		return func() tea.Msg {
-			return paneFocusedMsg{paneID: binding.Ref.Pane, contextNotice: contextNotice, err: fmt.Errorf("created pane runtime identity is unavailable")}
+			return paneFocusedMsg{
+				paneID: binding.Ref.Pane, contextNotice: contextNotice,
+				err: fmt.Errorf("created pane has an unsupported runtime binding"),
+			}
 		}
 	}
 }
@@ -284,12 +290,12 @@ func uniqueLiveHerdrPane(panes []paneView, paneID string) (paneView, error) {
 	return *found, nil
 }
 
-func uniqueLiveHerdrBinding(panes []paneView, launched backend.PaneBinding) (paneView, error) {
+func uniqueLiveHerdrBinding(panes []paneView, binding backend.PaneBinding) (paneView, error) {
 	var found *paneView
 	for i := range panes {
 		pane := &panes[i]
 		if backend.NormalizeName(pane.Backend) != backend.Herdr ||
-			!sameCreatedPaneBinding(launched, pane.savedPane.RuntimeBinding()) {
+			!binding.SameLaunchTarget(pane.savedPane.RuntimeBinding()) {
 			continue
 		}
 		if found != nil {
@@ -301,14 +307,6 @@ func uniqueLiveHerdrBinding(panes []paneView, launched backend.PaneBinding) (pan
 		return paneView{}, fmt.Errorf("newly created pane is not live")
 	}
 	return *found, nil
-}
-
-func sameCreatedPaneBinding(launched, current backend.PaneBinding) bool {
-	if !backend.AgentSessionAdmits(launched.Agent, launched.AgentSession, current.AgentSession) {
-		return false
-	}
-	launched.AgentSession = current.AgentSession
-	return launched.Equal(current)
 }
 
 func (m *model) focusPaneCmd(pane paneView, zoom bool, contextNotice string) tea.Cmd {

@@ -206,6 +206,8 @@ var prefixRules = []struct {
 	{"tests/bin/", Rule{ID: "tests-bin", Class: ClassH, Source: SourceExtra, Note: "fake gh/tmux/git = テストの物差し"}},
 	{"tests/bats/", Rule{ID: "tests-suite", Class: ClassM, Source: SourceExtra, Note: "bats テスト"}},
 	{"tests/fixtures/", Rule{ID: "tests-suite", Class: ClassM, Source: SourceExtra, Note: "テストフィクスチャ"}},
+	{"internal/infra/agentlog/testdata/", Rule{ID: "tests-suite", Class: ClassM, Source: SourceExtra, Note: "外部エージェントの採取フィクスチャ"}},
+	{"internal/infra/procscan/testdata/", Rule{ID: "tests-suite", Class: ClassM, Source: SourceExtra, Note: "プロセス出力の採取フィクスチャ"}},
 	{"tests/golden/", Rule{ID: "tests-suite", Class: ClassM, Source: SourceExtra, Note: "ゴールデン出力"}},
 
 	// CI and repo automation.
