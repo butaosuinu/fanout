@@ -47,6 +47,8 @@ func (m *model) execCreatedPaneAttach(msg createdPaneAttachPreparedMsg) (tea.Cmd
 	if err != nil {
 		return nil, err
 	}
+	// The translated reader would make os/exec pipe stdin and wait for more input after detach.
+	cmd.Stdin = m.terminalInput
 	keyboard := m.opts.keyboard
 	keyboard.Disable()
 	m.keyboardPaused = true

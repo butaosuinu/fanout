@@ -162,6 +162,7 @@ type model struct {
 	notifications     map[issueKey]issueTransitionSnapshot
 	notifyPrimed      bool
 	keyboardPaused    bool
+	terminalInput     fdReader
 	quitAfterLaunch   bool
 	relayoutGen       int
 	promptOnly        bool
@@ -252,6 +253,7 @@ func Run(opts Options) error {
 		return err
 	}
 	defer closeInput()
+	m.terminalInput = input.src
 	defer keyboard.Disable()
 	_, err = tea.NewProgram(
 		m,

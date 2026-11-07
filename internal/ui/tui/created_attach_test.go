@@ -1,15 +1,112 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"reflect"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
+
+func TestCreatedPaneAttachReturnsWithoutFurtherInput(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("terminal=%t", terminal), func(t *testing.T) {
+			if terminal && !term.IsTerminal(os.Stdin.Fd()) {
+				t.Skip("run the test binary in a synthetic PTY to check the /dev/tty fallback")
+			}
+			for _, exitCode := range []int{0, 7} {
+				t.Run(fmt.Sprintf("exit=%d", exitCode), func(t *testing.T) {
+					reader, writer, err := os.Pipe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = reader.Close() }) // Close the owned test pipe.
+					t.Cleanup(func() { _ = writer.Close() }) // Keep it open and silent during attach.
+					input := newShiftEnterInput(reader)
+					if terminal {
+						var closeInput func()
+						input, closeInput, err = newShiftEnterProgramInput(reader)
+						if err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(closeInput)
+					}
+					assertCreatedPaneAttachReturns(t, input, writer, terminal, exitCode)
+				})
+			}
+		})
+	}
+}
+
+func assertCreatedPaneAttachReturns(t *testing.T, input *shiftEnterInput, writer *os.File, terminal bool, exitCode int) {
+	t.Helper()
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := fmt.Sprintf("exit %d", exitCode)
+	if terminal {
+		command = "test -t 0 || exit 99; " + command
+	}
+	m := newModel(Options{})
+	m.terminalInput = input.src
+	cmd, err := m.execCreatedPaneAttach(createdPaneAttachPreparedMsg{
+		spec: backend.AttachExec{Path: shell, Argv: []string{shell, "-c", command}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, func() {
+		_ = writer.Close()    // Unblock a regressed pipe read on timeout.
+		_ = input.src.Close() // Release the owned input if the program is stuck.
+	})
+	defer stop()
+	result, err := tea.NewProgram(attachReturnModel{cmd: cmd}, tea.WithInput(input),
+		tea.WithOutput(io.Discard), tea.WithoutRenderer(), tea.WithoutSignalHandler()).Run()
+	if err != nil || ctx.Err() != nil {
+		t.Fatalf("attach did not return without further input: run=%v context=%v", err, ctx.Err())
+	}
+	done := result.(attachReturnModel).done
+	if exitCode == 0 && done.err != nil {
+		t.Fatalf("attach exit: %v", done.err)
+	}
+	if exitCode != 0 {
+		exitErr, ok := errors.AsType[*exec.ExitError](done.err)
+		if !ok || exitErr.ExitCode() != exitCode {
+			t.Fatalf("attach exit = %v, want %d", done.err, exitCode)
+		}
+	}
+	updated, _ := m.Update(done)
+	if updated.(model).keyboardPaused {
+		t.Fatal("keyboard remained paused after attach returned")
+	}
+}
+
+type attachReturnModel struct {
+	cmd  tea.Cmd
+	done createdPaneAttachDoneMsg
+}
+
+func (m attachReturnModel) Init() tea.Cmd { return m.cmd }
+func (m attachReturnModel) View() string  { return "" }
+func (m attachReturnModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if done, ok := msg.(createdPaneAttachDoneMsg); ok {
+		m.done = done
+		return m, tea.Quit
+	}
+	return m, nil
+}
 
 func TestCreatedPaneAttachCommandPreservesStructuredProcessImage(t *testing.T) {
 	spec := backend.AttachExec{
