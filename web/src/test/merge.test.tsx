@@ -20,7 +20,7 @@ beforeEach(() => {
   /* マージは token gate 必須(サーバが --no-token では拒否する)。SPA は
    * ページ URL の ?token= を読むので、テストもそこに置く。 */
   window.history.replaceState({}, "", "/?token=t0ken");
-  /* Drawer を開くと PeekPanel が /api/peek を叩く(onUnhandledRequest:"error"
+  /* Drawer を開くと PeekPanel が /api/peek を叩く(onUnhandledFrame:"error"
    * のため素通しできない)。本ファイルの関心対象ではないので常設で応える。 */
   server.use(
     http.get("/api/peek", () =>
@@ -96,7 +96,11 @@ async function openDiff(
   server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse(diff))));
   const drawer = await openDrawer(user);
   await user.click(within(drawer).getByRole("button", { name: "変更を表示" }));
-  return await screen.findByRole("dialog");
+  const overlay = await screen.findByRole("dialog");
+  /* マージボタンの名前と無効化理由は /api/diff の応答で決まる。dialog は応答より
+   * 先に出るので、取得中の表示が消えるまで待ってから呼び出し側に渡す。 */
+  await waitFor(() => expect(within(overlay).queryByText(/diff を取得中/)).toBeNull());
+  return overlay;
 }
 
 describe("マージボタンの出現条件", () => {
