@@ -51,12 +51,14 @@ func TestClassifyPath(t *testing.T) {
 		{name: "infra codex app-server is M", path: "internal/infra/codexapp/server.go", want: ClassM, found: true},
 
 		// --- dashboard: every file is enumerated; a new file falls through ---
+		{name: "dashboard routes is H", path: "internal/ui/dashboard/routes.go", want: ClassH, found: true},
 		{name: "dashboard server is H", path: "internal/ui/dashboard/server.go", want: ClassH, found: true},
 		{name: "dashboard runfile is H", path: "internal/ui/dashboard/runfile.go", want: ClassH, found: true},
 		{name: "dashboard peek is H", path: "internal/ui/dashboard/peek.go", want: ClassH, found: true},
 		{name: "dashboard plan is H", path: "internal/ui/dashboard/plan.go", want: ClassH, found: true},
 		{name: "dashboard poller is M", path: "internal/ui/dashboard/poller.go", want: ClassM, found: true},
 		{name: "dashboard sse is M", path: "internal/ui/dashboard/sse.go", want: ClassM, found: true},
+		{name: "dashboard static is M", path: "internal/ui/dashboard/static.go", want: ClassM, found: true},
 		{name: "dashboard embed is M", path: "internal/ui/dashboard/embed.go", want: ClassM, found: true},
 		{name: "dashboard new file is unclassified", path: "internal/ui/dashboard/newthing.go", found: false},
 

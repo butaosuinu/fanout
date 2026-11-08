@@ -187,6 +187,12 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 サーバは `127.0.0.1` にのみバインドし、起動毎にランダムトークンを生成して URL に埋め込みます(単一ユーザ端末では `--no-token` で外せます)。
 読み取り系の endpoint はすべて GET 専用です。例外は後述の 2 つ — PR のマージと、マージ後のリモートブランチ削除だけです。
 埋め込みの SPA は、フィルタと詳細ドロワー、直近出力の live peek でライブの Session 一覧を見せます。
+
+HTML shell と静的アセットは token-free です。
+バンドルがある場合、対応するファイルがない拡張子なしパスにも SPA routing 用の HTML shell を返します。
+`--no-token` 指定時を除き、`/api/*` の読み取りには引き続き token が必要です。
+バンドル未ビルド時は `/` だけがビルド手順を返し、それ以外は 404 です。
+
 Prompt Session の記録済み branch に PR があると、ダッシュボードに PR リンクと CI 状態も表示します。
 
 `pr` 列にはその行の PR のレビュー状態が出ます。語彙は TUI と同じで、`merged` /
