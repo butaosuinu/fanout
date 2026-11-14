@@ -16,7 +16,7 @@ composition root。層ルールの正典は `internal/arch/godep-cruiser.json`
 | `infra` | 外部プロセス・ファイルシステム・DB | core / infra | 制約なし |
 | `ui` | TUI・web ダッシュボード | core / app / infra / ui | 制約なし |
 | `cmd` | composition root(`cmd/fanout`) | core / app / infra / ui | import される側になってはならない — 他パッケージからの `cmd/...` import は全面禁止 |
-| `tools` | repo 支援メタツール(PR review risk 判定など製品コード外) | tools のみ(本体層は import 不可・被 import も不可) | stdlib のみ(arch ガードが強制) |
+| `tools` | repo 支援メタツール(PR review risk 判定など製品コード外) | tools のみ(本体層は import 不可・被 import も不可) | stdlib のみ。ただし #680 の型生成に必要な `tools/typegen` 直下の Go ファイル → `github.com/gzuidhof/tygo/tygo` の import だけ許可(arch ガードが強制) |
 
 依存の向きは一方向で、`ui -> app -> core` が主経路、`app` と `ui` はどちらも
 `infra` に直接手を伸ばせる。強制するのは `internal/arch` の Go テスト
@@ -116,6 +116,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `browser` | ブラウザ起動 | A |
 | infra | `backendtest` | core backend 契約の in-process fake(テスト専用・本体にはリンクされない) | A |
 | tools | `tools/reviewrisk` | PR review risk 判定(物差し。ルール変更はレビュー配線を変える) | H |
+| tools | `tools/typegen` | Go DTO から TS 型を生成・drift 検証 | M |
 | web | `web/index.html` | no-referrer・外部 fetch 方針(token 漏洩境界) | H |
 | web | `web/src/transport` | SSE/polling transport・token 付き `/api/*` 呼び出し | M |
 | web | `web/src/shared/github.ts` | GitHub URL の検証つき生成(href 安全性境界) | M |

@@ -32,7 +32,7 @@ type diffIdentity struct {
 	byTask bool
 }
 
-type diffResponse struct {
+type DiffResponse struct {
 	PaneID     string `json:"paneId"`
 	BranchName string `json:"branchName"`
 	BaseBranch string `json:"baseBranch"`
@@ -47,22 +47,22 @@ type diffResponse struct {
 	Dirty      bool            `json:"dirty"`
 	BasePushed bool            `json:"basePushed"`
 	CapturedAt string          `json:"capturedAt"`
-	Files      []diffFileEntry `json:"files"`
+	Files      []DiffFileEntry `json:"files"`
 	Patch      string          `json:"patch"`
 	Truncated  bool            `json:"truncated"`
 	TotalBytes int             `json:"totalBytes"`
 }
 
-type diffFileEntry struct {
+type DiffFileEntry struct {
 	Path string `json:"path"`
 	// OldPath carries a rename's merge-base path. omitempty on purpose: renames
 	// are a minority of entries and every byte competes for diffMaxBytes.
 	OldPath       string `json:"oldPath,omitempty"`
-	Additions     *int   `json:"additions"`
-	Deletions     *int   `json:"deletions"`
+	Additions     *int   `json:"additions" tstype:"number | null,required"`
+	Deletions     *int   `json:"deletions" tstype:"number | null,required"`
 	Binary        bool   `json:"binary"`
 	PatchIncluded bool   `json:"patchIncluded"`
-	OmittedReason string `json:"omittedReason"`
+	OmittedReason string `json:"omittedReason" tstype:"'' | 'binary' | 'tooLarge' | 'collectionLimit' | 'responseLimit'"`
 }
 
 type diffPatchGroup struct {
@@ -360,7 +360,7 @@ func marshalDiffResponse(
 		return nil, fmt.Errorf("diff contains %d files; limit is %d", len(patch.Files), diffMaxFiles)
 	}
 
-	response := diffResponse{
+	response := DiffResponse{
 		PaneID:     pv.PaneID,
 		BranchName: pv.BranchName,
 		BaseBranch: pv.BaseBranch,
@@ -369,14 +369,14 @@ func marshalDiffResponse(
 		Dirty:      patch.Dirty,
 		BasePushed: patch.BasePushed,
 		CapturedAt: capturedAt,
-		Files:      make([]diffFileEntry, len(patch.Files)),
+		Files:      make([]DiffFileEntry, len(patch.Files)),
 	}
 	var includedIndexes []int
 	for i, stat := range patch.Files {
 		if !validDiffFileStat(stat) {
 			return nil, fmt.Errorf("diff file metadata for %q is inconsistent", stat.Path)
 		}
-		response.Files[i] = diffFileEntry{
+		response.Files[i] = DiffFileEntry{
 			Path:          stat.Path,
 			OldPath:       stat.OldPath,
 			Additions:     new(stat.Additions),

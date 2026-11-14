@@ -196,6 +196,7 @@ var prefixRules = []struct {
 
 	// tools meta-tooling (this tool). New tools stay unclassified -> high.
 	{"tools/reviewrisk/", Rule{ID: "tools-reviewrisk", Class: ClassH, Source: SourceDocTable, Note: "PR review risk 判定(物差し。ルール変更はレビュー配線を変える)"}},
+	{"tools/typegen/", Rule{ID: "tools-typegen", Class: ClassM, Source: SourceDocTable, Note: "Go DTO から TS 型を生成・drift 検証"}},
 
 	// web transport vs display.
 	{"web/src/transport/", Rule{ID: "web-transport", Class: ClassM, Source: SourceDocTable, Note: "SSE/polling transport・token 付き /api/* 呼び出し"}},

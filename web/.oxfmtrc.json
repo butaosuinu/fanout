@@ -3,5 +3,5 @@
   "printWidth": 100,
   // CSS は対象外 — PAPER BREEZE の手揃え(カラム整列・1 行ルール)を機械整形で
   // 壊さない。oxfmt の整形対象は TS/TSX のみ。
-  "ignorePatterns": ["**/*.css"]
+  "ignorePatterns": ["**/*.css", "src/transport/generated/"]
 }

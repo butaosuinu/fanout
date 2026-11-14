@@ -216,8 +216,8 @@ func verifyPaneAgainstLive(pv sessionview.PaneView, panes []tmuxrun.LivePane) er
 	return fmt.Errorf("pane %s is gone", pv.PaneID)
 }
 
-// peekResponse is the GET /api/peek wire contract the SPA consumes.
-type peekResponse struct {
+// PeekResponse is the GET /api/peek wire contract the SPA consumes.
+type PeekResponse struct {
 	PaneID     string `json:"paneId"`
 	Lines      int    `json:"lines"`
 	CapturedAt string `json:"capturedAt"` // RFC3339 UTC
@@ -252,7 +252,7 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A failed response write means the client went away; nothing to do here.
-	_ = json.NewEncoder(w).Encode(peekResponse{
+	_ = json.NewEncoder(w).Encode(PeekResponse{
 		PaneID:     paneID,
 		Lines:      lines,
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),

@@ -42,7 +42,7 @@ endif
 GO_CACHE_ENV   = $(if $(strip $(GOCACHE)),GOCACHE="$(GOCACHE)")
 PNPM_STORE_ARG = $(if $(strip $(PNPM_STORE_DIR)),--store-dir "$(PNPM_STORE_DIR)")
 
-.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web i18n-web fix vuln check-bats review-risk complexity prepare-dev-cache
+.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web i18n-web gen-types fix vuln check-bats review-risk complexity prepare-dev-cache
 
 # The local default lives under predictable /tmp on supported macOS and Linux
 # hosts. Reject a pre-created symlink or a directory owned by another user
@@ -297,6 +297,9 @@ lint-web: $(WEB_DIR)/node_modules/.installed
 			exit 1; \
 		}
 	cd $(WEB_DIR) && $(PNPM) run i18n:verify
+
+gen-types:
+	$(GO) run ./tools/typegen -write
 
 fmt-web: $(WEB_DIR)/node_modules/.installed
 	cd $(WEB_DIR) && $(PNPM) run fmt

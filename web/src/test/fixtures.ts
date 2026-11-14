@@ -58,8 +58,10 @@ export function makePane(over: Partial<PaneView> = {}): PaneView {
     diffSummary: "+10/-2",
     dirtyState: "clean",
     tmuxState: "live",
+    runtimeState: over.tmuxState ?? "live",
     blockers: [],
     blocked: false,
+    derived: { sort: { issueNum: over.issueNum ?? 101 }, canFocus: true, canPeek: true },
     ...over,
   };
 }
@@ -84,10 +86,12 @@ export function makeQueuedPane(over: Partial<PaneView> = {}): PaneView {
     diffSummary: "-",
     dirtyState: "-",
     tmuxState: "queued",
+    runtimeState: over.tmuxState ?? "queued",
     ciStatus: "-", // Go 側は synthetic 行にも常に CIStatus を入れる
     blockers: [],
     blocked: false,
     notStarted: true,
+    derived: { sort: { issueNum: over.issueNum ?? 103 }, canFocus: false, canPeek: false },
     ...over,
   };
 }
@@ -139,6 +143,7 @@ export function makeDiffResponse(over: Partial<DiffResponse> = {}): DiffResponse
     branchName: "fanout/fix-thing",
     baseBranch: "main",
     mergeBase: "0123456789abcdef0123456789abcdef01234567",
+    headCommit: "",
     dirty: false,
     basePushed: true,
     capturedAt: "2026-07-29T01:23:45Z",

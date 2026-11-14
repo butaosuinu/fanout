@@ -2,6 +2,7 @@ package arch
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -21,8 +22,9 @@ import (
 // app/ and cmd/ naming a concrete runtime adapter (tmuxrun, tmuxbackend,
 // herdrrun - they go through core/backend ports, constructed by
 // internal/infra/paneruntime; test files are exempt), core stdlib purity, the
-// tools/ stdlib-only pin, the cmd/... import ban, the package main location
-// check, and the ban on bare *.go files at tree/layer roots.
+// tools/ stdlib-only pin with the exact typegen -> tygo exception, the cmd/...
+// import ban, the package main location check, and the ban on bare *.go files
+// at tree/layer roots.
 // godep-cruiser scans every *.go file under the whole repo root (tests
 // included, build constraints not evaluated, skipping testdata/, vendor/, and
 // dot- or underscore-prefixed directories). That is deliberately wider than
@@ -53,6 +55,61 @@ func TestArchitecture(t *testing.T) {
 		GoModPath: filepath.Join(root, "go.mod"),
 		Baseline:  &baseline,
 	})
+}
+
+func TestToolsDependencyRules(t *testing.T) {
+	configuration, err := config.LoadFile("godep-cruiser.json")
+	if err != nil {
+		t.Fatalf("config.LoadFile(godep-cruiser.json) = %v, want nil", err)
+	}
+	tests := []struct {
+		file       string
+		importPath string
+		wantRules  []string
+	}{
+		{"tools/typegen/main.go", "os", nil},
+		{"tools/reviewrisk/main.go", "os", nil},
+		{"tools/typegen/main.go", "github.com/gzuidhof/tygo/tygo", nil},
+		{"tools/typegen/typegen_test.go", "github.com/gzuidhof/tygo/tygo", nil},
+		{"tools/reviewrisk/main.go", "github.com/gzuidhof/tygo/tygo", []string{"tools-stdlib-only"}},
+		{"tools/typegenextra/main.go", "github.com/gzuidhof/tygo/tygo", []string{"tools-stdlib-only"}},
+		{"tools/typegen/nested/helper.go", "github.com/gzuidhof/tygo/tygo", []string{"tools-stdlib-only"}},
+		{"tools/typegen/main.go", "github.com/gzuidhof/tygo", []string{"typegen-stdlib-or-tygo"}},
+		{"tools/typegen/main.go", "github.com/gzuidhof/tygo/tygo/extra", []string{"typegen-stdlib-or-tygo"}},
+		{"tools/typegen/main.go", "example.com/other", []string{"typegen-stdlib-or-tygo"}},
+		{"tools/reviewrisk/main.go", "example.com/other", []string{"tools-stdlib-only"}},
+		{"tools/typegen/main.go", "C", []string{"typegen-stdlib-or-tygo"}},
+		{"tools/typegen/main.go", "github.com/butaosuinu/fanout/internal/core/errs", []string{"not-in-allowed", "typegen-stdlib-or-tygo"}},
+		{"tools/reviewrisk/main.go", "github.com/butaosuinu/fanout/internal/core/errs", []string{"not-in-allowed", "tools-stdlib-only"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file+"/"+tt.importPath, func(t *testing.T) {
+			root := t.TempDir()
+			filename := filepath.Join(root, tt.file)
+			if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/butaosuinu/fanout\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			source := fmt.Sprintf("package main\nimport _ %q\n", tt.importPath)
+			if err := os.WriteFile(filename, []byte(source), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := cruiser.Validate(configuration, cruiser.Options{ScanRoot: root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rules []string
+			for _, violation := range result.Violations {
+				rules = append(rules, violation.Rule)
+			}
+			slices.Sort(rules)
+			if !slices.Equal(rules, tt.wantRules) || result.ErrorCount() != len(tt.wantRules) {
+				t.Errorf("violations = %+v, want error rules %v", result.Violations, tt.wantRules)
+			}
+		})
+	}
 }
 
 // repoRoot walks up from the working directory (the package dir under

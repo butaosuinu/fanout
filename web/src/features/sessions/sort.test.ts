@@ -59,12 +59,12 @@ describe("sortPanes", () => {
     const highDiff = makePane({
       issueNum: 1,
       diffSummary: "+999/-0",
-      derived: { sort: { diff: 1 } },
+      derived: { ...makePane().derived, sort: { issueNum: 1, diff: 1 } },
     });
     const lowDiff = makePane({
       issueNum: 2,
       diffSummary: "+1/-0",
-      derived: { sort: { diff: 999 } },
+      derived: { ...makePane().derived, sort: { issueNum: 2, diff: 999 } },
     });
     expect(nums(sortPanes([lowDiff, highDiff], "diff", 1))).toEqual([1, 2]);
   });

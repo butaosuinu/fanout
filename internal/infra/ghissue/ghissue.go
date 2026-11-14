@@ -42,7 +42,7 @@ type Issue struct {
 type PRRef struct {
 	Number         int     `json:"number"`
 	State          string  `json:"state"`
-	MergedAt       *string `json:"mergedAt"`
+	MergedAt       *string `json:"mergedAt" tstype:"string | null,required"`
 	IsDraft        bool    `json:"isDraft,omitempty"`
 	ReviewDecision string  `json:"reviewDecision,omitempty"`
 	CIStatus       string  `json:"ci,omitempty"`
@@ -88,7 +88,7 @@ type PRRef struct {
 	// Only the dashboard poller and the TUI's PR column fill it (see PRStacks);
 	// every other path leaves it nil. A pointer, so omitempty drops it and
 	// existing JSON stays unchanged.
-	Stack *PRStack `json:"stack,omitempty"`
+	Stack *PRStack `json:"stack,omitempty" tstype:"PRStack"`
 }
 
 func (pr PRRef) DisplayState() string {
