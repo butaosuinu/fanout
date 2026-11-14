@@ -186,6 +186,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `requireToken`。token 必須は `/api/*` のみ(`requireToken`)で、`/healthz` と
   全 SPA パスは token-free(HTML shell が `?token=` を読むため)。
   `routes.go` のテーブルで token-free 面と各 route の method gate を定義する。
+  middleware と読み取り API のエラーは `writeError` で `{"error":"message"}` の JSON を返す。
+  POST 系の `apiError` は同じ `error` に既存の `code` と任意の `detail` を加える。
+  `/healthz` の成功は `text/plain` の `ok`、静的ファイルのエラーは従来の配信契約を保つ。
   バンドルがあるとき、ファイルが存在しない拡張子なしパスにも `index.html` を返す。
   HTML shell の配信範囲は `/` から全 SPA パスへ広がるが、API の token gate は維持する。
   バンドル未ビルド時は `/` だけが案内ページで、それ以外は 404。

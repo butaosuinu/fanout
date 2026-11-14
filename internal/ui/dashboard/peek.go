@@ -88,7 +88,7 @@ func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool, bo
 func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
 	pv, recorded, unique := s.poller.snapshotPaneView(paneID)
 	if recorded && !unique {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s does not identify one recorded runtime pane", paneID))
+		writeError(w, http.StatusNotFound, fmt.Sprintf("pane %s does not identify one recorded runtime pane", paneID))
 		return sessionview.PaneView{}, false
 	}
 	runtimeBackend := backend.NormalizeName(pv.Backend)
@@ -96,7 +96,7 @@ func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionv
 		return s.requireOwnedHerdrPane(w, pv)
 	}
 	if recorded && runtimeBackend != backend.Tmux {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s uses unsupported backend %q", paneID, runtimeBackend))
+		writeError(w, http.StatusNotFound, fmt.Sprintf("pane %s uses unsupported backend %q", paneID, runtimeBackend))
 		return sessionview.PaneView{}, false
 	}
 	return requireLiveTmuxPane(w, paneID, pv, recorded)
@@ -109,22 +109,22 @@ func requireLiveTmuxPane(
 	recorded bool,
 ) (sessionview.PaneView, bool) {
 	if !paneIDRe.MatchString(paneID) {
-		peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
 		return sessionview.PaneView{}, false
 	}
 	if !recorded || !pv.Alive {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
+		writeError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
 		return sessionview.PaneView{}, false
 	}
 	if pv.Kind == state.PaneKindShell {
 		if strings.TrimSpace(pv.ShellKey) == "" {
-			peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded shell key to verify against", paneID))
+			writeError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded shell key to verify against", paneID))
 			return sessionview.PaneView{}, false
 		}
 		return pv, true
 	}
 	if pv.WorktreePath == "" {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded worktree to verify against", paneID))
+		writeError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded worktree to verify against", paneID))
 		return sessionview.PaneView{}, false
 	}
 	return pv, true
@@ -137,7 +137,7 @@ func (s *Server) requireOwnedHerdrPane(
 	owned := pv.Alive && s.ownsManagedPane != nil && s.readManagedPane != nil &&
 		s.ownsManagedPane(pv)
 	if !owned {
-		peekError(
+		writeError(
 			w,
 			http.StatusNotFound,
 			fmt.Sprintf(
@@ -171,7 +171,7 @@ func (s *Server) beginPaneCapture(w http.ResponseWriter, r *http.Request, pv ses
 		return true
 	}
 	if err := s.verifyPane(pv); err != nil {
-		peekError(w, http.StatusNotFound, err.Error())
+		writeError(w, http.StatusNotFound, err.Error())
 		return false
 	}
 	return true
@@ -238,7 +238,7 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("lines"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil {
-			peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid lines %q: want an integer", raw))
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid lines %q: want an integer", raw))
 			return
 		}
 		lines = min(max(n, 1), peekMaxLines)
@@ -248,7 +248,7 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.readPane(pv, lines)
 	if err != nil {
-		peekError(w, paneReadErrorStatus(pv, err), err.Error())
+		writeError(w, paneReadErrorStatus(pv, err), err.Error())
 		return
 	}
 	// A failed response write means the client went away; nothing to do here.
@@ -282,13 +282,4 @@ func (s *Server) readPane(pv sessionview.PaneView, lines int) (string, error) {
 		return "", fmt.Errorf("tmux capture-pane: %w", err)
 	}
 	return out, nil
-}
-
-// peekError writes a JSON error body so the SPA can surface the message
-// verbatim instead of parsing a text/plain http.Error.
-func peekError(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

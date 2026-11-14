@@ -30,6 +30,7 @@ func TestRouteInvariants(t *testing.T) {
 				if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") == "" {
 					t.Errorf("%s: status = %d, Allow = %q; want 405 with Allow", method, w.Code, w.Header().Get("Allow"))
 				}
+				assertJSONError(t, w, "method not allowed")
 			}
 			if !strings.HasPrefix(route.pattern, "/api/") {
 				return
@@ -47,6 +48,7 @@ func TestRouteInvariants(t *testing.T) {
 					if w.Code != http.StatusForbidden {
 						t.Errorf("%s %s: status = %d, want 403", method, query, w.Code)
 					}
+					assertJSONError(t, w, "forbidden")
 				}
 			}
 		})
@@ -55,4 +57,48 @@ func TestRouteInvariants(t *testing.T) {
 	if !slices.Equal(tokenFree, []string{"/", healthzPath}) {
 		t.Fatalf("token-free routes = %v, want / and /healthz only", tokenFree)
 	}
+}
+
+func assertJSONError(t *testing.T, w *httptest.ResponseRecorder, msg string) {
+	t.Helper()
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := decodeAPIError(t, w)["error"]; got != msg {
+		t.Errorf("error = %q, want %q", got, msg)
+	}
+}
+
+func TestWriteErrorEscapesMessage(t *testing.T) {
+	w := httptest.NewRecorder()
+	w.Header().Set("Allow", "GET, HEAD")
+	const msg = "invalid pane \"%5\"\n<script>"
+	writeError(w, http.StatusBadRequest, msg)
+	assertJSONError(t, w, msg)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if got := w.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Errorf("Allow = %q, want GET, HEAD", got)
+	}
+	if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := decodeAPIError(t, w); len(got) != 1 {
+		t.Errorf("error body = %v, want only error", got)
+	}
+}
+
+func TestStreamWithoutFlusherReturnsJSONError(t *testing.T) {
+	s := &Server{}
+	w := httptest.NewRecorder()
+	// Expose only ResponseWriter so the recorder's Flusher is unavailable.
+	s.handleStream(struct{ http.ResponseWriter }{w}, httptest.NewRequest(http.MethodGet, "/api/stream", nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	assertJSONError(t, w, "streaming unsupported")
 }

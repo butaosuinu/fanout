@@ -91,22 +91,22 @@ func noStore(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	identity, err := parseDiffIdentity(r.URL.Query())
 	if err != nil {
-		peekError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	pv, ok := s.poller.snapshotDiffPane(identity)
 	if !ok {
-		peekError(w, http.StatusNotFound, "diff identity does not match exactly one current snapshot row")
+		writeError(w, http.StatusNotFound, "diff identity does not match exactly one current snapshot row")
 		return
 	}
 	if pv.NotStarted || pv.Kind == state.PaneKindShell || pv.WorktreePath == "" {
-		peekError(w, http.StatusNotFound, "snapshot row has no recorded worktree")
+		writeError(w, http.StatusNotFound, "snapshot row has no recorded worktree")
 		return
 	}
 	info, err := os.Stat(pv.WorktreePath)
 	if err != nil || !info.IsDir() {
-		peekError(w, http.StatusNotFound, "recorded worktree is no longer available")
+		writeError(w, http.StatusNotFound, "recorded worktree is no longer available")
 		return
 	}
 
@@ -144,16 +144,16 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			peekError(w, http.StatusBadGateway, "diff collection timed out")
+			writeError(w, http.StatusBadGateway, "diff collection timed out")
 			return
 		}
-		peekError(w, http.StatusBadGateway, "git worktree patch: "+err.Error())
+		writeError(w, http.StatusBadGateway, "git worktree patch: "+err.Error())
 		return
 	}
 
 	body, err := marshalDiffResponse(pv, patch, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
-		peekError(w, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	// A failed response write means the client went away; nothing to do here.

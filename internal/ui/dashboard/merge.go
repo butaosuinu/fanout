@@ -67,7 +67,7 @@ type repoRef struct {
 	repo  string
 }
 
-// apiError is peekError's shape plus a machine code and an optional detail, so
+// apiError is writeError's shape plus a machine code and an optional detail, so
 // the SPA can branch on the failure without parsing prose. The message stays
 // fixed per code; anything variable belongs in detail.
 func apiError(w http.ResponseWriter, status int, code, msg, detail string) {

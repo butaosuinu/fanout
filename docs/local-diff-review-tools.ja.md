@@ -1393,9 +1393,9 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
   diff engine の実行に失敗した
 
 共通 middleware が生成する token 不一致の `403 Forbidden` と GET/HEAD 以外の
-`405 Method Not Allowed` は既存どおり `text/plain` とし、上の JSON error
-contract には含めない。
-ただし `/api/diff` の全 response は middleware error を含めて
+`405 Method Not Allowed` も `{"error":"message"}` の JSON を返す。
+405 は `Allow: GET, HEAD` を維持する。
+`/api/diff` の全 response は middleware error を含めて
 `Cache-Control: no-store` を付ける。
 
 ### 実装委譲事項

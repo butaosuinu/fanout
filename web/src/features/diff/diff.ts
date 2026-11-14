@@ -397,7 +397,7 @@ export function diffMeta(d: DiffResponse): string {
 }
 
 /* /api/diff のエラー body は {"error":"message"}(text は敵性入力 — 呼び出し側は
- * テキストノードのみで描画)。token/405 の middleware エラーは text/plain。 */
+ * テキストノードのみで描画)。token/405 の middleware エラーも同じ JSON 形式。 */
 export async function diffErrorMessage(res: Response): Promise<MessageDescriptor> {
   let detail = "";
   try {
@@ -406,7 +406,7 @@ export async function diffErrorMessage(res: Response): Promise<MessageDescriptor
       detail = String((body as { error: unknown }).error);
     }
   } catch {
-    /* JSON でない body(middleware の text/plain 等)は詳細なし */
+    /* JSON でない body は詳細なし */
   }
   if (res.status === 404) {
     return detail

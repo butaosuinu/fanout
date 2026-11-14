@@ -193,6 +193,10 @@ HTML shell と静的アセットは token-free です。
 `--no-token` 指定時を除き、`/api/*` の読み取りには引き続き token が必要です。
 バンドル未ビルド時は `/` だけがビルド手順を返し、それ以外は 404 です。
 
+API のエラーと method/token の拒否は、`error` メッセージを持つ JSON と `Cache-Control: no-store` を返します。
+POST のエラーには機械可読な `code` と `detail` が付く場合もあります。
+`/healthz` の成功は引き続き plain text の `ok`、静的ファイルのエラー応答は従来の形式です。
+
 Prompt Session の記録済み branch に PR があると、ダッシュボードに PR リンクと CI 状態も表示します。
 
 `pr` 列にはその行の PR のレビュー状態が出ます。語彙は TUI と同じで、`merged` /

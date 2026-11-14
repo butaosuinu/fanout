@@ -79,6 +79,12 @@ func TestHealthzOK(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("healthz status = %d", resp.StatusCode)
 	}
+	if got := resp.Header.Get("Content-Type"); got != "text/plain" {
+		t.Errorf("healthz Content-Type = %q, want text/plain", got)
+	}
+	if body, err := io.ReadAll(resp.Body); err != nil || string(body) != "ok\n" {
+		t.Errorf("healthz body = %q, err = %v; want ok", body, err)
+	}
 }
 
 func TestSnapshotEndpointReturnsJSON(t *testing.T) {
@@ -177,6 +183,9 @@ func TestNonGetIs405(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("POST status = %d want 405", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Allow"); got != "GET, HEAD" {
+		t.Errorf("Allow = %q, want GET, HEAD", got)
 	}
 }
 

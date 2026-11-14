@@ -5,6 +5,7 @@ package dashboard
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"mime"
@@ -78,13 +79,23 @@ func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintln(w, "ok")
 }
 
+// writeError is the shared JSON error response for middleware and read APIs.
+func writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	// A failed response write means the client went away; nothing to do here.
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 // getOnly rejects non-GET/HEAD methods with 405. Every route but the POST
 // carve-outs reads only, and this is what keeps that true by construction.
 func (s *Server) getOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		next(w, r)
@@ -178,7 +189,7 @@ func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 		if s.token != "" {
 			got := r.URL.Query().Get("token")
 			if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				writeError(w, http.StatusForbidden, "forbidden")
 				return
 			}
 		}

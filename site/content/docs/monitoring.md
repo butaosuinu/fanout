@@ -123,6 +123,8 @@ The server binds only to `127.0.0.1`, generating a random token each start and e
 
 The HTML shell and static assets are token-free. With a built bundle, a missing extensionless path also serves the HTML shell for SPA routing; `/api/*` reads still pass through the token gate unless `--no-token` is set. Without a built bundle, only `/` serves the build instructions and other paths return 404.
 
+API errors and method/token refusals return JSON with an `error` message and `Cache-Control: no-store`. POST errors can also carry a machine-readable `code` and a `detail`. `/healthz` still returns plain-text `ok` on success; static-file error responses keep their existing format.
+
 The dashboard also shows the PR link and CI status for a Prompt Session when a PR exists for its recorded branch.
 
 The `pr` column carries the review state of that row's PR, using the same vocabulary as the TUI: `merged`, `closed`, `draft`, `approved`, `changes-requested`, `review-required`, `open`. Next to it, a `conflict` tag marks a PR that conflicts with its base branch, and a comment count covers conversation comments plus inline review comments. The detail drawer repeats all three for every PR on the row, not just the primary one. A conflict tag only appears when GitHub reports one: merged and closed PRs never carry mergeability, and neither does an open PR in the seconds after a base push while GitHub recomputes.
