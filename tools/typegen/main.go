@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/gzuidhof/tygo/tygo"
-
-	"github.com/butaosuinu/fanout/internal/core/errs"
 )
 
 const outputDir = "web/src/transport/generated"
@@ -43,13 +41,12 @@ func main() {
 		os.Exit(2)
 	}
 	if err := writeTypes(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "typegen: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func writeTypes() (err error) {
-	defer errs.Wrap(&err, "typegen")
+func writeTypes() error {
 	dir, err := os.MkdirTemp("", "fanout-typegen-")
 	if err != nil {
 		return err

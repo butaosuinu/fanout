@@ -198,9 +198,19 @@
     {
       "name": "tools-stdlib-only",
       "severity": "error",
-      "comment": "tools/ is stdlib-only: no module-internal packages and no third-party modules, so repo meta-tools stay physically separate from product code.",
-      "from": { "path": ["^tools/"] },
+      "comment": "tools/ is stdlib-only except the tools/typegen package, whose single third-party import is pinned by typegen-stdlib-or-tygo. No tool may import product packages.",
+      "from": { "path": ["^tools/"], "pathNot": ["^tools/typegen/[^/]+\\.go$"] },
       "to": { "dependencyTypesNot": ["stdlib"] }
+    },
+    {
+      "name": "typegen-stdlib-or-tygo",
+      "severity": "error",
+      "comment": "Issue #680 requires the tygo library for DTO generation. Only Go files directly in tools/typegen may import this exact package; product imports and all other non-stdlib dependencies remain forbidden.",
+      "from": { "path": ["^tools/typegen/[^/]+\\.go$"] },
+      "to": {
+        "dependencyTypesNot": ["stdlib"],
+        "pathNot": ["^github\\.com/gzuidhof/tygo/tygo$"]
+      }
     },
     {
       "name": "no-import-cmd",
