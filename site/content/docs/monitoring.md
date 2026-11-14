@@ -120,6 +120,9 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
 The server binds only to `127.0.0.1`, generating a random token each start and embedding it in the URL (drop it with `--no-token` on a single-user machine). Every endpoint that reads is GET-only. The two exceptions are below: merging a pull request, and deleting its remote branch afterwards. The embedded SPA shows the live Session list with a filter, a detail drawer, and a live peek of recent output.
+
+The HTML shell and static assets are token-free. With a built bundle, a missing extensionless path also serves the HTML shell for SPA routing; `/api/*` reads still pass through the token gate unless `--no-token` is set. Without a built bundle, only `/` serves the build instructions and other paths return 404.
+
 The dashboard also shows the PR link and CI status for a Prompt Session when a PR exists for its recorded branch.
 
 The `pr` column carries the review state of that row's PR, using the same vocabulary as the TUI: `merged`, `closed`, `draft`, `approved`, `changes-requested`, `review-required`, `open`. Next to it, a `conflict` tag marks a PR that conflicts with its base branch, and a comment count covers conversation comments plus inline review comments. The detail drawer repeats all three for every PR on the row, not just the primary one. A conflict tag only appears when GitHub reports one: merged and closed PRs never carry mergeability, and neither does an open PR in the seconds after a base push while GitHub recomputes.

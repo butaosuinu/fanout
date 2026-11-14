@@ -72,7 +72,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `sessionbinding` | 遅延 Herdr agent session の初回束縛と state lock 下の保存 | H |
 | core | `telemetry` | emitter command と環境変数の wire contract | H |
 | app | `prmerge` | dashboard から叩く GitHub PR merge の対象選択・事前検証・2 段実行 | H |
-| ui | `dashboard`(`server.go`) | localhost web サーバの mux(GET-only な読み取りと POST carve-out)・同一 origin 検証・token 検証 | H |
+| ui | `dashboard`(`server.go` / `routes.go`) | localhost web サーバの lifecycle・route テーブル(GET-only な読み取りと POST carve-out)・同一 origin 検証・token 検証 | H |
 | ui | `dashboard`(`merge.go`) | mutation 経路(merge)。PR 特定・事前検証・gh 失敗のステータス写像 | H |
 | ui | `dashboard`(`deletebranch.go`) | mutation 経路(マージ後の head ref 削除)。所有権検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
@@ -104,7 +104,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | core | `parentref` | 親参照の正規化(state/sessionview の parent key) | M |
 | core | `fanset` | fan-out 対象集合の計算(launch 対象の選別) | M |
 | core | `blockers` | ブロッカー判定(--unblocked-only の起動対象選別・wave 計算の入力) | M |
-| ui | `dashboard`(`poller.go` / `sse.go` / `embed.go`) | state/runtime ポーリング・SSE・embed | M |
+| ui | `dashboard`(`poller.go` / `sse.go` / `embed.go` / `static.go`) | state/runtime ポーリング・SSE・embed・SPA 配信 | M |
 | ui | `tui`(描画・整形以外: `update.go` / `keyboard.go` / `newpane*.go` / `issues.go` / `watch.go` / `paneview.go` ほか) | キー処理・フォーム・ポーリングの配線。`paneview.go` は lifecycle 対象 state root の選択入力(`sourceProjectRoot`)を含む | M |
 | core | `exitcode` | 終了コード定義 | A |
 | core | `cliview` | CLI 出力の整形 | A |
@@ -184,8 +184,14 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   415。この Content-Type 要求が CSRF の主防御 — 単純リクエストではないので
   クロスオリジン fetch は preflight され、mux は OPTIONS を持たない)、その後に
   `requireToken`。token 必須は `/api/*` のみ(`requireToken`)で、`/healthz` と
-  SPA 配信は token-free(HTML shell が `?token=` を読むため)。token-free 範囲の
-  拡大も縮小も、mutation endpoint の追加も、この 1 本の作用範囲の拡大も人間
+  全 SPA パスは token-free(HTML shell が `?token=` を読むため)。
+  `routes.go` のテーブルで token-free 面と各 route の method gate を定義する。
+  バンドルがあるとき、ファイルが存在しない拡張子なしパスにも `index.html` を返す。
+  HTML shell の配信範囲は `/` から全 SPA パスへ広がるが、API の token gate は維持する。
+  バンドル未ビルド時は `/` だけが案内ページで、それ以外は 404。
+  `noStore` は diff と POST の method gate の外側に置き、405/403 にも付ける。
+  SSE のためグローバルな `ReadTimeout` / `WriteTimeout` は設定しない。
+  token-free 範囲の拡大も縮小も、mutation endpoint の追加も、この 1 本の作用範囲の拡大も人間
   レビュー対象。token gate が無効(`--no-token`)なら merge だけは拒否する —
   loopback ポートは同一マシンの全プロセスと他ローカルユーザから届くので、
   「requireToken の後ろ」という条件が空になった状態で mutation を開けたままには

@@ -5,7 +5,7 @@ import "strings"
 // Rule values reused across several exact-match paths that share one doc row.
 var (
 	ruleCmdH       = Rule{ID: "cmd-h-files", Class: ClassH, Source: SourceDocTable, Note: "dispatch・runtime backend・self-exec・launch・state 書き換えを伴う cmd エントリ"}
-	ruleDashboardM = Rule{ID: "dashboard-m-files", Class: ClassM, Source: SourceDocTable, Note: "state/runtime ポーリング・SSE・embed"}
+	ruleDashboardM = Rule{ID: "dashboard-m-files", Class: ClassM, Source: SourceDocTable, Note: "state/runtime ポーリング・SSE・embed・SPA 配信"}
 	ruleTuiA       = Rule{ID: "tui-a-files", Class: ClassA, Source: SourceDocTable, Note: "TUI の View 層(描画・整形)"}
 	ruleWebBundle  = Rule{ID: "extra-web-bundle", Class: ClassH, Source: SourceExtra, Note: "web 依存・埋め込みバンドルの生成系"}
 	ruleWebConfig  = Rule{ID: "extra-web-config", Class: ClassM, Source: SourceExtra, Note: "web ビルド設定"}
@@ -36,6 +36,7 @@ var fileRules = map[string]Rule{
 	// dashboard H files (server mux / POST carve-out / runfile trust gate /
 	// capture-pane chain).
 	"internal/ui/dashboard/server.go":       {ID: "dashboard-server", Class: ClassH, Source: SourceDocTable, Note: "localhost web サーバの mux(GET-only 読み取りと POST carve-out)・同一 origin 検証・token 検証"},
+	"internal/ui/dashboard/routes.go":       {ID: "dashboard-server", Class: ClassH, Source: SourceDocTable, Note: "localhost web サーバの mux(GET-only 読み取りと POST carve-out)・同一 origin 検証・token 検証"},
 	"internal/ui/dashboard/merge.go":        {ID: "dashboard-merge", Class: ClassH, Source: SourceDocTable, Note: "mutation 経路(merge)。PR 特定・事前検証・gh 失敗のステータス写像"},
 	"internal/ui/dashboard/deletebranch.go": {ID: "dashboard-delete-branch", Class: ClassH, Source: SourceDocTable, Note: "mutation 経路(マージ後の head ref 削除)。所有権検証"},
 	"internal/ui/dashboard/runfile.go":      {ID: "dashboard-runfile", Class: ClassH, Source: SourceDocTable, Note: "token を含む dashboard.json・reuse/trust ゲート"},
@@ -48,6 +49,7 @@ var fileRules = map[string]Rule{
 	"internal/ui/dashboard/poller.go": ruleDashboardM,
 	"internal/ui/dashboard/sse.go":    ruleDashboardM,
 	"internal/ui/dashboard/embed.go":  ruleDashboardM,
+	"internal/ui/dashboard/static.go": ruleDashboardM,
 
 	// tui: actions.go is H, the view/format trio is A; the tui prefix rule
 	// classifies every other tui file M.
