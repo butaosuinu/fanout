@@ -96,7 +96,10 @@ describe("matches", () => {
   });
 
   it("derived waveText が full label のときも compact wN alias で一致する", () => {
-    const p = makePane({ wave: 2, derived: { waveText: "W2 ready", dependencyWave: "wave2" } });
+    const p = makePane({
+      wave: 2,
+      derived: { ...makePane().derived, waveText: "W2 ready", dependencyWave: "wave2" },
+    });
     expect(matches(p, q("wave:w2"))).toBe(true);
   });
 
@@ -214,6 +217,7 @@ describe("matches", () => {
       agentState: "",
       dirtyState: "clean",
       derived: {
+        ...makePane().derived,
         filterText: "shared haystack",
         filterValues: {
           run: "running",

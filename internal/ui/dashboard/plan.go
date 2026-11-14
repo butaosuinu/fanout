@@ -20,11 +20,11 @@ const (
 	planCloseTag = "</proposed_plan>"
 )
 
-// planResponse is the GET /api/plan wire contract the SPA consumes. Found
+// PlanResponse is the GET /api/plan wire contract the SPA consumes. Found
 // false (with empty Plan) is a successful 200: the pane is a plan-mode pane
 // but no complete plan block is currently in the capturable output (not yet
 // proposed, or scrolled out of the alternate screen).
-type planResponse struct {
+type PlanResponse struct {
 	PaneID     string `json:"paneId"`
 	CapturedAt string `json:"capturedAt"` // RFC3339 UTC
 	Found      bool   `json:"found"`
@@ -62,7 +62,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	plan, found := extractLastPlan(out)
 	// A failed response write means the client went away; nothing to do here.
-	_ = json.NewEncoder(w).Encode(planResponse{
+	_ = json.NewEncoder(w).Encode(PlanResponse{
 		PaneID:     paneID,
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
 		Found:      found,

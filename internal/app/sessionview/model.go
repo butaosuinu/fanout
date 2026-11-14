@@ -30,16 +30,16 @@ type Snapshot struct {
 	// whether GitHub itself has been re-read since some moment cannot tell the
 	// two apart otherwise.
 	GHRefreshedAt string    `json:"ghRefreshedAt,omitempty"`
-	Sessions      []Session `json:"sessions"` // grouped by parent, sorted
-	Rollup        Rollup    `json:"rollup"`   // repo-wide totals across all sessions
-	Degraded      Degraded  `json:"degraded"` // which data sources were unavailable
+	Sessions      []Session `json:"sessions" tstype:"Session[] | null"` // grouped by parent, sorted
+	Rollup        Rollup    `json:"rollup"`                             // repo-wide totals across all sessions
+	Degraded      Degraded  `json:"degraded"`                           // which data sources were unavailable
 }
 
 // Session is the set of panes that share a Pane.Parent — one parent issue (or
 // Project) renders as one card. A repo's state.json may hold several parents.
 type Session struct {
 	Parent string     `json:"parent"`
-	Panes  []PaneView `json:"panes"`
+	Panes  []PaneView `json:"panes" tstype:"PaneView[] | null"`
 	Rollup Rollup     `json:"rollup"`
 }
 
@@ -89,7 +89,7 @@ type PaneView struct {
 	CreatedAt   string          `json:"createdAt"`
 	Alive       bool            `json:"alive"`      // PaneRef is present and verified in the live runtime snapshot
 	IssueState  string          `json:"issueState"` // OPEN / CLOSED / UNKNOWN
-	PRs         []ghissue.PRRef `json:"prs"`
+	PRs         []ghissue.PRRef `json:"prs" tstype:"PRRef[] | null"`
 	HasMergedPR bool            `json:"hasMergedPr"`
 	DiffSummary string          `json:"diffSummary"`           // +X/-Y vs merge-base with the base branch (committed + uncommitted + untracked)
 	DirtyState  string          `json:"dirtyState"`            // dirty / clean / unknown

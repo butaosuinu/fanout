@@ -328,7 +328,7 @@ func TestPlanHappyPath(t *testing.T) {
 	if cc := header.Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("cache-control = %q want no-store", cc)
 	}
-	var got planResponse
+	var got PlanResponse
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", body, err)
 	}
@@ -356,7 +356,7 @@ func TestPlanWithoutBlockIsFoundFalse(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d want 200, body %s", status, body)
 	}
-	var got planResponse
+	var got PlanResponse
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", body, err)
 	}

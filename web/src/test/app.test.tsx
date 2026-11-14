@@ -992,22 +992,22 @@ describe("drawer + peek", () => {
     );
     const user = userEvent.setup();
     render(<App />);
-    streamSnapshot(
-      makeSnapshot([
-        makeSession("142", [
-          makePane({
-            issueNum: 105,
-            displayName: "Herdr child",
-            agent: "codex",
-            backend: "herdr",
-            paneId: "w1:p5",
-            alive: true,
-            planMode: true,
-            ...(canPeek === undefined ? {} : { derived: { canPeek } }),
-          }),
-        ]),
-      ]),
-    );
+    const pane = makePane({
+      issueNum: 105,
+      displayName: "Herdr child",
+      agent: "codex",
+      backend: "herdr",
+      paneId: "w1:p5",
+      alive: true,
+      planMode: true,
+    });
+    if (canPeek === undefined) {
+      // 旧 snapshot の欠落時も fail-closed を維持する。
+      Reflect.deleteProperty(pane.derived, "canPeek");
+    } else {
+      pane.derived.canPeek = canPeek;
+    }
+    streamSnapshot(makeSnapshot([makeSession("142", [pane])]));
 
     await user.click(screen.getByText("Herdr child"));
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });

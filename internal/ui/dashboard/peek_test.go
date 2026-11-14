@@ -458,7 +458,7 @@ func TestPeekHappyPath(t *testing.T) {
 	if cc := header.Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("cache-control = %q want no-store", cc)
 	}
-	var got peekResponse
+	var got PeekResponse
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("unmarshal %s: %v", body, err)
 	}
@@ -490,7 +490,7 @@ func TestPeekLinesClamping(t *testing.T) {
 		if status != http.StatusOK {
 			t.Fatalf("lines=%s status = %d want 200, body %s", tc.lines, status, body)
 		}
-		var got peekResponse
+		var got PeekResponse
 		if err := json.Unmarshal(body, &got); err != nil {
 			t.Fatalf("unmarshal %s: %v", body, err)
 		}

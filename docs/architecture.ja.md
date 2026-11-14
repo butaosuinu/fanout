@@ -116,6 +116,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `browser` | ブラウザ起動 | A |
 | infra | `backendtest` | core backend 契約の in-process fake(テスト専用・本体にはリンクされない) | A |
 | tools | `tools/reviewrisk` | PR review risk 判定(物差し。ルール変更はレビュー配線を変える) | H |
+| tools | `tools/typegen` | Go DTO から TS 型を生成・drift 検証 | M |
 | web | `web/index.html` | no-referrer・外部 fetch 方針(token 漏洩境界) | H |
 | web | `web/src/transport` | SSE/polling transport・token 付き `/api/*` 呼び出し | M |
 | web | `web/src/shared/github.ts` | GitHub URL の検証つき生成(href 安全性境界) | M |

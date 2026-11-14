@@ -112,9 +112,9 @@ func patchGroup(path string, size int) string {
 	return header + strings.Repeat("x", size-len(header)-1) + "\n"
 }
 
-func decodeDiffResponse(t *testing.T, recorder *httptest.ResponseRecorder) diffResponse {
+func decodeDiffResponse(t *testing.T, recorder *httptest.ResponseRecorder) DiffResponse {
 	t.Helper()
-	var response diffResponse
+	var response DiffResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response %q: %v", recorder.Body.String(), err)
 	}
@@ -431,13 +431,13 @@ func TestDiffResponseLimitDoesNotCountTruncatedBooleanAsPatchBudget(t *testing.T
 	fullBody := func() []byte {
 		t.Helper()
 		additions := file.Additions
-		body, err := json.Marshal(diffResponse{
+		body, err := json.Marshal(DiffResponse{
 			PaneID:     pv.PaneID,
 			BranchName: pv.BranchName,
 			BaseBranch: pv.BaseBranch,
 			MergeBase:  strings.Repeat("a", 40),
 			CapturedAt: capturedAt,
-			Files: []diffFileEntry{{
+			Files: []DiffFileEntry{{
 				Path:          file.Path,
 				Additions:     &additions,
 				Deletions:     new(int),
@@ -471,7 +471,7 @@ func TestDiffResponseLimitDoesNotCountTruncatedBooleanAsPatchBudget(t *testing.T
 	if err != nil {
 		t.Fatalf("marshalDiffResponse: %v", err)
 	}
-	var got diffResponse
+	var got DiffResponse
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
