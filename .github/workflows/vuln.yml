@@ -59,7 +59,7 @@ jobs:
       - uses: actions/setup-go@v6.5.0
         if: steps.changed.outputs.go == 'true'
         with:
-          go-version-file: go.mod
+          go-version: '1.26.11'
           check-latest: true
 
       - run: make vuln
