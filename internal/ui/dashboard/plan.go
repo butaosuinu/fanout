@@ -34,7 +34,7 @@ type planResponse struct {
 // handlePlan serves GET /api/plan?pane=%N: a one-shot read of the last
 // complete <proposed_plan> block in one recorded Codex Plan Mode pane.
 // Validation, headers, HEAD handling, and the error contract are shared with
-// /api/peek (requireLivePane / beginPaneCapture / peekError); the only
+// /api/peek (requireLivePane / beginPaneCapture / writeError); the only
 // plan-specific gate is PlanMode plus Agent == "codex" — capture stays scoped
 // to Codex panes fanout launched in plan mode. The capture is read-only
 // (tmux capture-pane), so the dashboard stays mutation-free.
@@ -45,11 +45,11 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if backend.NormalizeName(pv.Backend) != backend.Tmux {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a tmux plan-mode pane", paneID))
+		writeError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a tmux plan-mode pane", paneID))
 		return
 	}
 	if !pv.PlanMode || pv.Agent != "codex" {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a codex plan-mode pane", paneID))
+		writeError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a codex plan-mode pane", paneID))
 		return
 	}
 	if !s.beginPaneCapture(w, r, pv) {
@@ -57,7 +57,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.capturePlan(paneID, planCaptureLines)
 	if err != nil {
-		peekError(w, http.StatusBadGateway, "tmux capture-pane: "+err.Error())
+		writeError(w, http.StatusBadGateway, "tmux capture-pane: "+err.Error())
 		return
 	}
 	plan, found := extractLastPlan(out)
